@@ -443,6 +443,12 @@ get_msbuild_args() {
         args="${args};/p:CustomMauiVersion=$MAUI_VERSION"
     fi
 
+    # Pass device serial to MSBuild so -t:Install targets the correct device.
+    # The Android SDK expects AdbTarget to contain the full adb flag: "-s <serial>"
+    if [[ -n "$DEVICE" ]]; then
+        args="${args};/p:AdbTarget=-s $DEVICE"
+    fi
+
     echo "$args"
 }
 
