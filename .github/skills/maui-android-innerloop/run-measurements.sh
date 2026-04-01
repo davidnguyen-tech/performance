@@ -625,6 +625,14 @@ run_measurement() {
     ensure_pythonpath
     ensure_dotnet_root
 
+    # Set HELIX_WORKITEM_UPLOAD_ROOT so runner.py copies traces to our output
+    # directory *during* the run — before cleanup wipes the working traces/ dir.
+    # In CI, Helix sets this env var; locally we point it at our output dir.
+    local config_output_dir="$OUTPUT_DIR/$config"
+    mkdir -p "$config_output_dir"
+    export HELIX_WORKITEM_UPLOAD_ROOT="$config_output_dir"
+    log "HELIX_WORKITEM_UPLOAD_ROOT=$HELIX_WORKITEM_UPLOAD_ROOT"
+
     # Detect edit file paths dynamically
     detect_edit_paths
 
@@ -654,63 +662,46 @@ run_measurement() {
     fi
 }
 
-# ===== Save Binlogs and Results =====
+# ===== Verify Saved Results =====
+# Traces are saved automatically by runner.py via HELIX_WORKITEM_UPLOAD_ROOT
+# during the measurement run — before cleanup wipes the working traces/ dir.
+# This function verifies that traces were saved and extracts a summary.
 save_binlogs() {
     local config="$1"
-    local scenario_dir="$REPO_ROOT/src/scenarios/mauiandroidinnerloop"
-    local traces_dir="$scenario_dir/traces"
     local dest_dir="$OUTPUT_DIR/$config"
+    local traces_subdir="$dest_dir/traces"
 
-    log "Saving results for $config to $dest_dir ..."
+    log "Verifying results for $config in $dest_dir ..."
 
     if [[ "$DRY_RUN" == "true" ]]; then
-        log "[DRY-RUN] Would copy $traces_dir/* to $dest_dir/"
+        log "[DRY-RUN] Would verify traces in $traces_subdir"
         return
     fi
 
-    mkdir -p "$dest_dir"
-
-    if [[ ! -d "$traces_dir" ]]; then
-        warn "No traces directory found at $traces_dir"
+    if [[ ! -d "$traces_subdir" ]]; then
+        warn "No traces directory found at $traces_subdir — runner.py may not have copied traces"
+        warn "Check that HELIX_WORKITEM_UPLOAD_ROOT was set correctly"
         return
     fi
 
-    # Count source files before copying — detect empty traces dir early
-    local src_count
-    src_count=$(find "$traces_dir" -type f | wc -l | tr -d ' ')
-    if [[ "$src_count" -eq 0 ]]; then
-        warn "Traces directory exists but contains no files: $traces_dir"
-        ls -la "$traces_dir" >&2
+    # Verify trace files exist
+    local file_count
+    file_count=$(find "$traces_subdir" -type f | wc -l | tr -d ' ')
+    if [[ "$file_count" -eq 0 ]]; then
+        warn "Traces directory exists but contains no files: $traces_subdir"
         return
     fi
 
-    log "  Found $src_count files in $traces_dir"
-
-    # Copy all trace files using find+cp to avoid glob expansion failures.
-    # The glob pattern "$dir/"* fails silently when the directory is empty or
-    # contains only dotfiles, and piping through 2>/dev/null hides real errors.
-    find "$traces_dir" -type f -exec cp -v {} "$dest_dir/" \;
-
-    # Verify files were actually copied
-    local dest_count
-    dest_count=$(find "$dest_dir" -type f | wc -l | tr -d ' ')
-    if [[ "$dest_count" -eq 0 ]]; then
-        warn "Copy appeared to succeed but no files found in $dest_dir/"
-        warn "Source directory contents:"
-        ls -la "$traces_dir" >&2
-        return
-    fi
-
-    log "Copied $dest_count files to $dest_dir/"
+    log "  Found $file_count trace files in $traces_subdir"
 
     # Itemize what was saved
     local binlog_count report_count
-    binlog_count=$(find "$dest_dir" -type f -name "*.binlog" | wc -l | tr -d ' ')
-    report_count=$(find "$dest_dir" -type f -name "*report*.json" | wc -l | tr -d ' ')
+    binlog_count=$(find "$traces_subdir" -type f -name "*.binlog" | wc -l | tr -d ' ')
+    report_count=$(find "$traces_subdir" -type f -name "*report*.json" | wc -l | tr -d ' ')
     log "  $binlog_count binlogs, $report_count JSON reports"
 
     # Extract a human-readable summary from JSON report files
-    extract_report_summary "$dest_dir"
+    extract_report_summary "$traces_subdir"
 }
 
 # ===== Extract Report Summary =====
@@ -838,11 +829,14 @@ main() {
         # Run the measurement
         run_measurement "$config"
 
-        # Save binlogs to output directory
+        # Verify traces were saved (runner.py copies them via HELIX_WORKITEM_UPLOAD_ROOT)
         save_binlogs "$config"
 
         # Cleanup between configs (post.py deletes app/ directory)
         cleanup
+
+        # Unset so it doesn't leak into the next config's run
+        unset HELIX_WORKITEM_UPLOAD_ROOT
 
         log "--- $config measurement complete ---"
     done
@@ -856,12 +850,12 @@ main() {
 
     # Print a summary of saved files per config
     for config in ${CONFIGS//,/ }; do
-        local config_dir="$OUTPUT_DIR/$config"
-        if [[ -d "$config_dir" ]]; then
+        local traces_dir="$OUTPUT_DIR/$config/traces"
+        if [[ -d "$traces_dir" ]]; then
             local count
-            count=$(find "$config_dir" -type f -name "*.binlog" | wc -l | tr -d ' ')
+            count=$(find "$traces_dir" -type f -name "*.binlog" | wc -l | tr -d ' ')
             local reports
-            reports=$(find "$config_dir" -type f -name "*report*.json" | wc -l | tr -d ' ')
+            reports=$(find "$traces_dir" -type f -name "*report*.json" | wc -l | tr -d ' ')
             log "  $config: $count binlogs, $reports reports"
         fi
     done
