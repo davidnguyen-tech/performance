@@ -20,7 +20,7 @@ PACKAGE_NAME="com.companyname.mauiandroidinnerloop"
 
 # ===== Defaults =====
 REPO_ROOT=""
-CONFIGS="mono-interpreter"
+CONFIGS="mono-default"
 OUTPUT_DIR="./maui-innerloop-results"
 ITERATIONS=10
 FRAMEWORK="net11.0"
@@ -61,8 +61,8 @@ Required:
 
 Options:
   --configs CONFIGS            Comma-separated runtime configs to measure
-                               Values: mono-interpreter, coreclr-jit
-                               (default: mono-interpreter)
+                               Values: mono-default, coreclr-default
+                               (default: mono-default)
   --output-dir DIR             Where to save binlogs and results
                                (default: ./maui-innerloop-results)
   --iterations N               Number of incremental deploy iterations
@@ -95,17 +95,16 @@ Workflow Control:
   --help                       Show this usage message
 
 Configuration Mapping:
-  mono-interpreter   →  /p:UseMonoRuntime=true
-  coreclr-jit        →  /p:UseMonoRuntime=false /p:PublishReadyToRun=false
-                        /p:PublishReadyToRunComposite=false
+  mono-default       →  /p:UseMonoRuntime=true
+  coreclr-default    →  /p:UseMonoRuntime=false
 
 Examples:
-  # Basic mono-interpreter measurement
+  # Basic mono-default measurement
   ./run-measurements.sh --repo-root ~/repos/performance
 
   # Both configs, 5 iterations
   ./run-measurements.sh --repo-root ~/repos/performance \
-    --configs mono-interpreter,coreclr-jit --iterations 5
+    --configs mono-default,coreclr-default --iterations 5
 
   # With custom runtime pack from local dotnet/runtime build
   ./run-measurements.sh --repo-root ~/repos/performance \
@@ -176,8 +175,8 @@ validate_prereqs() {
     # Validate config names
     for config in ${CONFIGS//,/ }; do
         case "$config" in
-            mono-interpreter|coreclr-jit) ;;
-            *) die "Unknown config: $config (valid: mono-interpreter, coreclr-jit)" ;;
+            mono-default|coreclr-default) ;;
+            *) die "Unknown config: $config (valid: mono-default, coreclr-default)" ;;
         esac
     done
 
@@ -357,6 +356,10 @@ fix_csproj() {
     # BSD sed (macOS) requires -i '' for in-place editing.
     sed -i '' '/<TargetFrameworks.*IsOSPlatform/d' "$csproj"
 
+    # Fix minSdkVersion: update Android SupportedOSPlatformVersion from 21.0 to 23.0
+    # to match what androidx.lifecycle requires.
+    sed -i '' "s|<SupportedOSPlatformVersion Condition=\"\$(\[MSBuild\]::GetTargetPlatformIdentifier('\$(TargetFramework)')) == 'android'\">21.0</SupportedOSPlatformVersion>|<SupportedOSPlatformVersion Condition=\"\$([MSBuild]::GetTargetPlatformIdentifier('\$(TargetFramework)')) == 'android'\">23.0</SupportedOSPlatformVersion>|" "$csproj"
+
     log "Fixed csproj: $(grep '<TargetFrameworks' "$csproj" | head -1 | xargs)"
 }
 
@@ -467,11 +470,11 @@ get_msbuild_args() {
     local args=""
 
     case "$config" in
-        mono-interpreter)
+        mono-default)
             args="/p:UseMonoRuntime=true"
             ;;
-        coreclr-jit)
-            args="/p:UseMonoRuntime=false;/p:PublishReadyToRun=false;/p:PublishReadyToRunComposite=false"
+        coreclr-default)
+            args="/p:UseMonoRuntime=false"
             ;;
         *)
             die "Unknown config: $config"

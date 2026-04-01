@@ -1,6 +1,6 @@
 ---
 name: maui-android-innerloop
-description: Guide for running MAUI Android Inner Loop deploy measurements in the dotnet/performance repo, including an automation script and custom framework pack support. Use this when asked to measure, benchmark, or compare MAUI Android first deploy and incremental deploy times across runtime configurations (Mono+Interpreter, CoreCLR+JIT, etc.), or when testing local builds of dotnet/runtime, dotnet/android, or dotnet/maui.
+description: Guide for running MAUI Android Inner Loop deploy measurements in the dotnet/performance repo, including an automation script and custom framework pack support. Use this when asked to measure, benchmark, or compare MAUI Android first deploy and incremental deploy times across runtime configurations (Mono Default, CoreCLR Default, etc.), or when testing local builds of dotnet/runtime, dotnet/android, or dotnet/maui.
 ---
 
 # MAUI Android Inner Loop Measurement
@@ -36,15 +36,15 @@ Before running measurements, verify:
 The `run-measurements.sh` script in this skill directory automates the entire workflow — bootstrap, app creation, csproj fixing, measurement, binlog collection, and cleanup.
 
 ```bash
-# Quick: measure Mono+Interpreter (default)
+# Quick: measure Mono Default (default)
 ~/.copilot/skills/maui-android-innerloop/run-measurements.sh \
   --repo-root /path/to/dotnet-performance \
-  --configs mono-interpreter
+  --configs mono-default
 
 # Both configs
 ~/.copilot/skills/maui-android-innerloop/run-measurements.sh \
   --repo-root /path/to/dotnet-performance \
-  --configs mono-interpreter,coreclr-jit \
+  --configs mono-default,coreclr-default \
   --output-dir ./results
 
 # Dry run to see what would happen
@@ -88,8 +88,8 @@ Remove these two lines that follow the android TargetFrameworks line:
 
 | Configuration     | MSBuild Properties                                                                    |
 |-------------------|---------------------------------------------------------------------------------------|
-| Mono+Interpreter  | `/p:UseMonoRuntime=true`                                                              |
-| CoreCLR+JIT       | `/p:UseMonoRuntime=false /p:PublishReadyToRun=false /p:PublishReadyToRunComposite=false` |
+| Mono Default      | `/p:UseMonoRuntime=true`                                                              |
+| CoreCLR Default   | `/p:UseMonoRuntime=false`                                                             |
 
 ## Running a Measurement
 
@@ -97,7 +97,7 @@ Remove these two lines that follow the android TargetFrameworks line:
 # Clean from any prior run
 rm -rf app/bin app/obj traces
 
-# Mono+Interpreter
+# Mono Default
 python3 test.py androidinnerloop \
   --csproj-path app/MauiAndroidInnerLoop.csproj \
   --edit-src src/MainPage.xaml.cs \
@@ -105,13 +105,13 @@ python3 test.py androidinnerloop \
   -f net11.0-android -c Debug \
   --msbuild-args "/p:UseMonoRuntime=true"
 
-# CoreCLR+JIT
+# CoreCLR Default
 python3 test.py androidinnerloop \
   --csproj-path app/MauiAndroidInnerLoop.csproj \
   --edit-src src/MainPage.xaml.cs \
   --edit-dest app/MainPage.xaml.cs \
   -f net11.0-android -c Debug \
-  --msbuild-args "/p:UseMonoRuntime=false;/p:PublishReadyToRun=false;/p:PublishReadyToRunComposite=false"
+  --msbuild-args "/p:UseMonoRuntime=false"
 ```
 
 ## What test.py androidinnerloop Does
@@ -163,7 +163,7 @@ Test a custom .NET runtime (CoreCLR or Mono) built locally:
 # 2. Run measurements with custom runtime pack:
 ~/.copilot/skills/maui-android-innerloop/run-measurements.sh \
   --repo-root /path/to/dotnet-performance \
-  --configs mono-interpreter \
+  --configs mono-default \
   --runtime-pack-path /path/to/runtime/artifacts/bin/microsoft.netcore.app.runtime.android-arm64/Release \
   --nuget-feed /path/to/runtime/artifacts/packages/Release/Shipping
 ```
@@ -177,7 +177,7 @@ Test a custom Android runtime pack (e.g., modified Java interop, build tasks):
 ```bash
 ~/.copilot/skills/maui-android-innerloop/run-measurements.sh \
   --repo-root /path/to/dotnet-performance \
-  --configs mono-interpreter \
+  --configs mono-default \
   --android-pack-path /path/to/android/artifacts/bin/Microsoft.Android.Runtime.Mono/Release/android-arm64
 ```
 
@@ -189,7 +189,7 @@ Test custom MAUI packages (requires the NuGet packages to be available in a feed
 # Requires MAUI NuGet packages in a feed
 ~/.copilot/skills/maui-android-innerloop/run-measurements.sh \
   --repo-root /path/to/dotnet-performance \
-  --configs mono-interpreter \
+  --configs mono-default \
   --maui-version 11.0.0-dev.123 \
   --nuget-feed /path/to/maui/artifacts/packages/Release/Shipping
 ```
@@ -201,7 +201,7 @@ All three overrides can be used together to test a fully custom stack:
 ```bash
 ~/.copilot/skills/maui-android-innerloop/run-measurements.sh \
   --repo-root /path/to/dotnet-performance \
-  --configs coreclr-jit \
+  --configs coreclr-default \
   --runtime-pack-path /path/to/runtime/artifacts/bin/microsoft.netcore.app.runtime.android-arm64/Release \
   --android-pack-path /path/to/android/artifacts/bin/Microsoft.Android.Runtime.CoreCLR/Release/android-arm64 \
   --maui-version 11.0.0-dev.123 \
@@ -234,7 +234,7 @@ Full CLI reference for `run-measurements.sh`:
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--repo-root DIR` | Path to dotnet/performance repo root | (required) |
-| `--configs CONFIGS` | Comma-separated configs: `mono-interpreter`, `coreclr-jit` | `mono-interpreter` |
+| `--configs CONFIGS` | Comma-separated configs: `mono-default`, `coreclr-default` | `mono-default` |
 | `--output-dir DIR` | Results output directory | `./maui-innerloop-results` |
 | `--device SERIAL` | Target a specific device/emulator (e.g., `emulator-5554`) | (none — auto-detect) |
 | `--iterations N` | Incremental deploy iterations | `10` |
