@@ -1,0 +1,150 @@
+<Project>
+
+  <!--
+    AndroidOverridePacks.targets — Override Android framework packs to use local builds.
+
+    Supports three independent override scenarios, each activated by a different MSBuild property.
+    When no properties are set, this file is a complete no-op.
+
+    Import this file from the app's Directory.Build.targets or via MSBuild args:
+      <Import Project="path/to/AndroidOverridePacks.targets"
+              Condition="'$(AndroidOverridePacksTargetsPath)' != ''" />
+
+    ===========================================================================================
+    SCENARIO 1: NETCore.App Runtime Pack Override (dotnet/runtime local build)
+    ===========================================================================================
+    Property: CustomNetCoreAppRuntimePackDir (required)
+    Property: CustomNetCoreAppRuntimePackVersion (optional, default: 99.99.99-dev)
+
+    When you build dotnet/runtime locally for Android:
+      ./build.sh -s clr+libs+packs+host -c Release -os android -a arm64
+
+    The runtime pack is produced at:
+      artifacts/bin/microsoft.netcore.app.runtime.android-arm64/Release/
+
+    Usage:
+      dotnet build -p:CustomNetCoreAppRuntimePackDir=/path/to/runtime/artifacts/bin/microsoft.netcore.app.runtime.android-arm64/Release/
+
+    WARNING — P/Invoke version skew risk:
+      Android's dotnet/android workload precompiles a P/Invoke table into libnet-android.release.so
+      (or libnet-android.debug.so) at workload build time. This table maps managed P/Invoke
+      signatures to native function pointers. If the NETCore.App runtime pack version does not
+      match the version that the installed Android workload was built against, P/Invoke calls
+      can crash at runtime (missing or mismatched function signatures). This override is safe
+      for scenarios that don't exercise mismatched P/Invoke paths, but be aware of the risk
+      when mixing runtime versions across repos.
+
+    ===========================================================================================
+    SCENARIO 2: Microsoft.Android Runtime Pack Override (dotnet/android local build)
+    ===========================================================================================
+    Property: CustomAndroidRuntimePackDir (required)
+    Property: CustomAndroidRuntimePackVersion (optional, default: 99.99.99-dev)
+
+    When you build dotnet/android locally, it produces runtime packs for each runtime variant
+    (MonoVM, CoreCLR, NativeAOT). The pack directory typically looks like:
+      artifacts/bin/Microsoft.Android.Runtime.android-arm64/Release/
+
+    Usage:
+      dotnet build -p:CustomAndroidRuntimePackDir=/path/to/android/artifacts/bin/Microsoft.Android.Runtime.android-arm64/Release/
+
+    ===========================================================================================
+    SCENARIO 3: MAUI Package Version Override (dotnet/maui local build)
+    ===========================================================================================
+    Property: CustomMauiVersion (required)
+
+    MAUI packages are NuGet packages, not framework packs. The MAUI template csproj references:
+      <PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
+
+    This override sets $(MauiVersion) to $(CustomMauiVersion). The local MAUI packages must be
+    available in a NuGet feed configured in NuGet.config (e.g., a local folder feed).
+
+    Usage:
+      dotnet build -p:CustomMauiVersion=11.0.0-dev.12345
+  -->
+
+  <!-- ===================================================================================== -->
+  <!-- SCENARIO 1: NETCore.App Runtime Pack Override                                         -->
+  <!-- ===================================================================================== -->
+
+  <PropertyGroup Condition="'$(CustomNetCoreAppRuntimePackDir)' != ''">
+    <CustomNetCoreAppRuntimePackVersion Condition="'$(CustomNetCoreAppRuntimePackVersion)' == ''">99.99.99-dev</CustomNetCoreAppRuntimePackVersion>
+  </PropertyGroup>
+
+  <!-- Remove the NETCore.App runtime pack from download/reference items so the SDK doesn't
+       try to download it from NuGet. Only removes android-targeted packs. -->
+  <Target Name="RemoveNetCoreAppRuntimePackFromDownloadItem"
+          AfterTargets="ProcessFrameworkReferences"
+          Condition="'$(CustomNetCoreAppRuntimePackDir)' != ''">
+    <ItemGroup>
+      <PackageDownload Remove="@(PackageDownload)"
+                       Condition="'$(UsePackageDownload)' == 'true' and $([System.String]::Copy('%(Identity)').StartsWith('Microsoft.NETCore.App.Runtime')) and $([System.String]::Copy('%(Identity)').Contains('android'))" />
+      <PackageReference Remove="@(PackageReference)"
+                        Condition="'$(UsePackageDownload)' != 'true' and $([System.String]::Copy('%(Identity)').StartsWith('Microsoft.NETCore.App.Runtime')) and $([System.String]::Copy('%(Identity)').Contains('android'))" />
+    </ItemGroup>
+  </Target>
+
+  <!-- Point the resolved runtime pack at the local build directory. -->
+  <Target Name="UpdateNetCoreAppRuntimePack"
+          AfterTargets="ResolveFrameworkReferences"
+          Condition="'$(CustomNetCoreAppRuntimePackDir)' != ''">
+    <ItemGroup>
+      <ResolvedRuntimePack Condition="'%(ResolvedRuntimePack.FrameworkName)' == 'Microsoft.NETCore.App'"
+          NuGetPackageVersion="$(CustomNetCoreAppRuntimePackVersion)"
+          PackageDirectory="$(CustomNetCoreAppRuntimePackDir)" />
+    </ItemGroup>
+  </Target>
+
+  <!-- Update the runtime framework version written into runtimeconfig.json. -->
+  <Target Name="UpdateNetCoreAppRuntimeFrameworkVersion"
+          AfterTargets="ResolveTargetingPackAssets"
+          Condition="'$(CustomNetCoreAppRuntimePackDir)' != ''">
+    <ItemGroup>
+      <RuntimeFramework Condition="'%(RuntimeFramework.FrameworkName)' == 'Microsoft.NETCore.App'"
+                        Version="$(CustomNetCoreAppRuntimePackVersion)" />
+    </ItemGroup>
+  </Target>
+
+  <!-- ===================================================================================== -->
+  <!-- SCENARIO 2: Microsoft.Android Runtime Pack Override                                   -->
+  <!-- ===================================================================================== -->
+
+  <PropertyGroup Condition="'$(CustomAndroidRuntimePackDir)' != ''">
+    <CustomAndroidRuntimePackVersion Condition="'$(CustomAndroidRuntimePackVersion)' == ''">99.99.99-dev</CustomAndroidRuntimePackVersion>
+  </PropertyGroup>
+
+  <!-- Remove the Android runtime pack from download items so the SDK doesn't
+       try to download it from NuGet. -->
+  <Target Name="RemoveAndroidRuntimePackFromDownloadItem"
+          AfterTargets="ProcessFrameworkReferences"
+          Condition="'$(CustomAndroidRuntimePackDir)' != ''">
+    <ItemGroup>
+      <PackageDownload Remove="@(PackageDownload)"
+                       Condition="'$(UsePackageDownload)' == 'true' and $([System.String]::Copy('%(Identity)').StartsWith('Microsoft.Android.Runtime'))" />
+      <PackageReference Remove="@(PackageReference)"
+                        Condition="'$(UsePackageDownload)' != 'true' and $([System.String]::Copy('%(Identity)').StartsWith('Microsoft.Android.Runtime'))" />
+    </ItemGroup>
+  </Target>
+
+  <!-- Point the resolved runtime pack at the local build directory. -->
+  <Target Name="UpdateAndroidRuntimePack"
+          AfterTargets="ResolveFrameworkReferences"
+          Condition="'$(CustomAndroidRuntimePackDir)' != ''">
+    <ItemGroup>
+      <ResolvedRuntimePack Condition="'%(ResolvedRuntimePack.FrameworkName)' == 'Microsoft.Android.Runtime'"
+          NuGetPackageVersion="$(CustomAndroidRuntimePackVersion)"
+          PackageDirectory="$(CustomAndroidRuntimePackDir)" />
+    </ItemGroup>
+  </Target>
+
+  <!-- ===================================================================================== -->
+  <!-- SCENARIO 3: MAUI Package Version Override                                             -->
+  <!-- ===================================================================================== -->
+
+  <!-- Override $(MauiVersion) so that PackageReference items using it pick up the custom version.
+       This requires the custom MAUI packages to be available in a NuGet feed (e.g., a local
+       folder feed configured in NuGet.config). -->
+  <PropertyGroup Condition="'$(CustomMauiVersion)' != ''">
+    <MauiVersion>$(CustomMauiVersion)</MauiVersion>
+  </PropertyGroup>
+
+</Project>
