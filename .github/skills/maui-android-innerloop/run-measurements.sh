@@ -327,6 +327,12 @@ create_app() {
     # Add local NuGet feed if specified
     inject_nuget_feed "$app_dir"
 
+    # Force a NuGet restore after injecting overrides so project.assets.json
+    # is regenerated with the custom packages.  Without this, the assets file
+    # created by pre.py's template step still references stock packages and
+    # the custom overrides are silently ignored.
+    force_restore_with_overrides "$app_dir"
+
     log "=== App template created ==="
 }
 
@@ -409,6 +415,50 @@ inject_nuget_feed() {
     # Insert the feed source before the closing </packageSources> tag
     sed -i '' "s|</packageSources>|    <add key=\"local-override\" value=\"$NUGET_FEED\" />\n  </packageSources>|" "$nuget_config"
     log "Added local NuGet feed: $NUGET_FEED"
+}
+
+# ===== Force NuGet restore after injecting overrides =====
+# pre.py creates the template and runs an implicit restore that caches the
+# stock MAUI packages.  After we inject AndroidOverridePacks.targets (which
+# changes $(MauiVersion) or runtime pack references) and add the local NuGet
+# feed, we must re-restore so that project.assets.json picks up the new
+# package versions from the custom feed.
+force_restore_with_overrides() {
+    local app_dir="$1"
+    local csproj="$app_dir/$EXENAME.csproj"
+
+    # Only needed if any custom pack override is configured
+    if [[ -z "$RUNTIME_PACK_PATH" && -z "$ANDROID_PACK_PATH" && -z "$MAUI_VERSION" ]]; then
+        return
+    fi
+
+    log "Forcing NuGet restore with custom pack overrides..."
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log "[DRY-RUN] Would run dotnet restore with custom pack properties"
+        return 0
+    fi
+
+    # Build the override properties
+    local props=()
+    if [[ -n "$RUNTIME_PACK_PATH" ]]; then
+        props+=("/p:CustomNetCoreAppRuntimePackDir=$RUNTIME_PACK_PATH")
+        props+=("/p:CustomNetCoreAppRuntimePackVersion=$RUNTIME_PACK_VERSION")
+    fi
+    if [[ -n "$ANDROID_PACK_PATH" ]]; then
+        props+=("/p:CustomAndroidRuntimePackDir=$ANDROID_PACK_PATH")
+        props+=("/p:CustomAndroidRuntimePackVersion=$ANDROID_PACK_VERSION")
+    fi
+    if [[ -n "$MAUI_VERSION" ]]; then
+        props+=("/p:CustomMauiVersion=$MAUI_VERSION")
+    fi
+
+    run_cmd dotnet restore "$csproj" \
+        "${props[@]}" \
+        --ignore-failed-sources \
+        /p:NuGetAudit=false
+
+    log "Forced restore complete — project.assets.json regenerated with custom packages."
 }
 
 # ===== Get MSBuild Args for a Configuration =====
