@@ -670,17 +670,114 @@ save_binlogs() {
 
     mkdir -p "$dest_dir"
 
-    if [[ -d "$traces_dir" ]]; then
-        cp -r "$traces_dir/"* "$dest_dir/" 2>/dev/null || true
-        log "Copied traces to $dest_dir/"
-
-        # List what we saved
-        local count
-        count=$(find "$dest_dir" -type f | wc -l | tr -d ' ')
-        log "  Saved $count files (binlogs + reports)"
-    else
+    if [[ ! -d "$traces_dir" ]]; then
         warn "No traces directory found at $traces_dir"
+        return
     fi
+
+    # Count source files before copying — detect empty traces dir early
+    local src_count
+    src_count=$(find "$traces_dir" -type f | wc -l | tr -d ' ')
+    if [[ "$src_count" -eq 0 ]]; then
+        warn "Traces directory exists but contains no files: $traces_dir"
+        ls -la "$traces_dir" >&2
+        return
+    fi
+
+    log "  Found $src_count files in $traces_dir"
+
+    # Copy all trace files using find+cp to avoid glob expansion failures.
+    # The glob pattern "$dir/"* fails silently when the directory is empty or
+    # contains only dotfiles, and piping through 2>/dev/null hides real errors.
+    find "$traces_dir" -type f -exec cp -v {} "$dest_dir/" \;
+
+    # Verify files were actually copied
+    local dest_count
+    dest_count=$(find "$dest_dir" -type f | wc -l | tr -d ' ')
+    if [[ "$dest_count" -eq 0 ]]; then
+        warn "Copy appeared to succeed but no files found in $dest_dir/"
+        warn "Source directory contents:"
+        ls -la "$traces_dir" >&2
+        return
+    fi
+
+    log "Copied $dest_count files to $dest_dir/"
+
+    # Itemize what was saved
+    local binlog_count report_count
+    binlog_count=$(find "$dest_dir" -type f -name "*.binlog" | wc -l | tr -d ' ')
+    report_count=$(find "$dest_dir" -type f -name "*report*.json" | wc -l | tr -d ' ')
+    log "  $binlog_count binlogs, $report_count JSON reports"
+
+    # Extract a human-readable summary from JSON report files
+    extract_report_summary "$dest_dir"
+}
+
+# ===== Extract Report Summary =====
+extract_report_summary() {
+    local dest_dir="$1"
+    local summary_file="$dest_dir/summary.txt"
+    local report_files
+    report_files=$(find "$dest_dir" -type f -name "*report*.json" 2>/dev/null)
+
+    if [[ -z "$report_files" ]]; then
+        log "  No JSON reports found — skipping summary extraction"
+        return
+    fi
+
+    log "  Extracting timing summary to $summary_file"
+
+    # Use python3 to parse JSON reports and extract key metrics.
+    # This is more reliable than jq which may not be installed.
+    python3 -c "
+import json, glob, os, sys
+
+dest = sys.argv[1]
+reports = sorted(glob.glob(os.path.join(dest, '*report*.json')))
+if not reports:
+    sys.exit(0)
+
+lines = []
+lines.append('MAUI Android Inner Loop — Timing Summary')
+lines.append('=' * 50)
+
+for path in reports:
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        lines.append(f'  [error reading {os.path.basename(path)}: {e}]')
+        continue
+
+    lines.append(f'')
+    lines.append(f'Report: {os.path.basename(path)}')
+    lines.append('-' * 40)
+
+    # The report structure has top-level keys like 'publish_time',
+    # 'tasks', etc. Walk the structure and print timing values.
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if isinstance(value, (int, float)):
+                lines.append(f'  {key}: {value}')
+            elif isinstance(value, dict):
+                lines.append(f'  {key}:')
+                for k2, v2 in value.items():
+                    if isinstance(v2, (int, float)):
+                        lines.append(f'    {k2}: {v2}')
+            elif isinstance(value, list):
+                # Handle lists of measurements
+                for i, item in enumerate(value):
+                    if isinstance(item, dict):
+                        name = item.get('name', item.get('test_name', f'item_{i}'))
+                        for k2, v2 in item.items():
+                            if isinstance(v2, (int, float)):
+                                lines.append(f'  {name}.{k2}: {v2}')
+
+summary = '\n'.join(lines) + '\n'
+print(summary)  # Show in log output
+with open(os.path.join(dest, 'summary.txt'), 'w') as f:
+    f.write(summary)
+" "$dest_dir" || warn "Summary extraction failed (non-fatal)"
 }
 
 # ===== Cleanup =====
