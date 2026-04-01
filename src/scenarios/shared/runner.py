@@ -1106,7 +1106,7 @@ ex: C:\repos\performance;C:\repos\runtime
             if self.framework:
                 base_cmd.extend(['-f', self.framework])
             if self.msbuildargs:
-                for arg in re.split(r'[;\s]+', self.msbuildargs):
+                for arg in re.split(r';+', self.msbuildargs):
                     if arg.strip():
                         base_cmd.append(arg.strip())
 
