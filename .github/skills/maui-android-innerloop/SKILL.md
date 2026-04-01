@@ -236,6 +236,7 @@ Full CLI reference for `run-measurements.sh`:
 | `--repo-root DIR` | Path to dotnet/performance repo root | (required) |
 | `--configs CONFIGS` | Comma-separated configs: `mono-interpreter`, `coreclr-jit` | `mono-interpreter` |
 | `--output-dir DIR` | Results output directory | `./maui-innerloop-results` |
+| `--device SERIAL` | Target a specific device/emulator (e.g., `emulator-5554`) | (none — auto-detect) |
 | `--iterations N` | Incremental deploy iterations | `10` |
 | `--framework TFM` | Target framework (without platform suffix) | `net11.0` |
 | `--runtime-pack-path DIR` | Local NETCore.App runtime pack directory | (none) |

@@ -32,6 +32,7 @@ MAUI_VERSION=""
 NUGET_FEED=""
 SKIP_BOOTSTRAP="false"
 SKIP_CREATE_APP="false"
+DEVICE=""
 DRY_RUN="false"
 
 # ===== Helpers =====
@@ -82,6 +83,11 @@ Custom Pack Overrides:
                                (requires packages available in NuGet feed)
   --nuget-feed DIR             Path to additional local NuGet feed
 
+Device Selection:
+  --device SERIAL              Target a specific device/emulator by serial
+                               (e.g., --device emulator-5554)
+                               Run 'adb devices' to list available serials.
+
 Workflow Control:
   --skip-bootstrap             Skip SDK/workload bootstrap
   --skip-create-app            Skip app template creation
@@ -123,6 +129,7 @@ parse_args() {
             --android-pack-version) ANDROID_PACK_VERSION="$2"; shift 2 ;;
             --maui-version)       MAUI_VERSION="$2";          shift 2 ;;
             --nuget-feed)         NUGET_FEED="$2";            shift 2 ;;
+            --device)             DEVICE="$2";               shift 2 ;;
             --skip-bootstrap)     SKIP_BOOTSTRAP="true";      shift   ;;
             --skip-create-app)    SKIP_CREATE_APP="true";     shift   ;;
             --dry-run)            DRY_RUN="true";             shift   ;;
@@ -160,9 +167,10 @@ validate_prereqs() {
     if [[ "$device_count" -eq 0 ]]; then
         warn "No Android device/emulator detected. Measurements will fail at deploy time."
         warn "Connect a device or start an emulator before running measurements."
-    elif [[ "$device_count" -gt 1 ]]; then
-        warn "Multiple devices detected. Set ANDROID_SERIAL to select one."
+    elif [[ "$device_count" -gt 1 ]] && [[ -z "$DEVICE" ]]; then
+        log "Multiple devices/emulators detected:"
         adb devices
+        die "Use --device SERIAL to select one (e.g., --device emulator-5554)."
     fi
 
     # Validate config names
@@ -636,6 +644,13 @@ cleanup() {
 # ===== Main =====
 main() {
     parse_args "$@"
+
+    # If --device was specified, export ANDROID_SERIAL so all adb commands target it
+    if [[ -n "$DEVICE" ]]; then
+        export ANDROID_SERIAL="$DEVICE"
+        log "Targeting device: $DEVICE"
+    fi
+
     validate_prereqs
 
     log "=========================================="
