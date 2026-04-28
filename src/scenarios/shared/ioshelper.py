@@ -418,9 +418,14 @@ class iOSHelper:
         # Wait for the app to fully start before collecting logs
         time.sleep(5)
 
-        # Collect device logs covering the launch window
+        # Collect device logs covering the launch window.
+        # Both rm -rf calls use sudo because `sudo log collect` writes the
+        # logarchive owned by root; an unprivileged rm cannot recurse into it
+        # and `log collect` refuses to overwrite an existing --output path
+        # (exit 74), so a stale archive from iteration N would block iteration
+        # N+1 from collecting any logs.
         logarchive = os.path.join(tempfile.gettempdir(), 'ioshelper_startup.logarchive')
-        self._run_quiet(['rm', '-rf', logarchive])
+        self._run_quiet(['sudo', 'rm', '-rf', logarchive])
         collect_cmd = ['sudo', 'log', 'collect', '--device',
                        '--start', start_ts, '--output', logarchive]
         RunCommand(collect_cmd, verbose=True).run()
@@ -475,8 +480,8 @@ class iOSHelper:
         getLogger().info("Cold startup: %d ms (Time to Main: %d ms, Time to First Draw: %d ms)",
                          total_ms, time_to_main_ms, time_to_draw_ms)
 
-        # Clean up logarchive
-        self._run_quiet(['rm', '-rf', logarchive])
+        # Clean up logarchive (sudo: log collect ran as root, so the tree is root-owned)
+        self._run_quiet(['sudo', 'rm', '-rf', logarchive])
 
         return total_ms
 
