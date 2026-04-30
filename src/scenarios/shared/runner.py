@@ -184,8 +184,8 @@ ex: C:\repos\performance;C:\repos\runtime
         androidinnerloopparser.add_argument('--configuration', '-c', help='Build configuration', dest='configuration', required=True)
         androidinnerloopparser.add_argument('--msbuild-args', help='Additional MSBuild arguments', dest='msbuildargs', default='')
         androidinnerloopparser.add_argument('--package-name', help='Android package name for startup measurement (e.g. com.companyname.mauiandroidinnerloop)', dest='packagename', required=True)
-        androidinnerloopparser.add_argument('--inner-loop-iterations', help='Number of incremental build+deploy+startup iterations (1+)', type=int, default=10, dest='innerloopiterations')
-        androidinnerloopparser.add_argument('--screen-timeout-ms', help='Screen timeout in milliseconds. Must be large enough so the display stays on for the entire scenario; a screen-off mid-run breaks cold startup measurement (am start reports LaunchState: UNKNOWN).', type=int, default=30 * 60 * 1000, dest='screentimeoutms')
+        androidinnerloopparser.add_argument('--inner-loop-iterations', help='Number of incremental build+deploy+startup iterations (1+)', type=int, default=10, dest='innerloopiterations', choices=range(1, 1001), metavar='N')
+        androidinnerloopparser.add_argument('--screen-timeout-ms', help='Screen timeout in milliseconds. Must be large enough so the display stays on for the entire scenario; if the screen turns off mid-run, ActivityTaskManager never emits the Displayed line and startup measurement times out.', type=int, default=30 * 60 * 1000, dest='screentimeoutms')
         self.add_common_arguments(androidinnerloopparser)
 
         args = parser.parse_args()
@@ -1010,12 +1010,21 @@ ex: C:\repos\performance;C:\repos\runtime
             from shared.util import helixuploaddir
             import upload
 
+            def remove_dotnet_run_binlog(binlog_path):
+                """Delete the extra `*-dotnet-run.binlog` that are produced by `dotnet run`.
+                It only contains the _Run target firing am start; we measure startup via logcat
+                and don't parse it.
+                """
+                aux = binlog_path[:-len('.binlog')] + '-dotnet-run.binlog'
+                if os.path.exists(aux):
+                    os.remove(aux)
+
             def merge_build_and_startup(build_report_path, startup_results, final_report_path):
                 """Load the build metrics report, append a startup time counter, write to final path."""
                 with open(build_report_path, 'r') as f:
                     report = json.load(f)
                 startup_counter = {
-                    "name": "Time to Main",
+                    "name": "Time to Displayed",
                     "topCounter": True,
                     "defaultCounter": False,
                     "higherIsBetter": False,
@@ -1064,6 +1073,7 @@ ex: C:\repos\performance;C:\repos\runtime
                 if pre_launch_fn is not None:
                     pre_launch_fn()
                 subprocess.run(incremental_cmd, check=True)
+                remove_dotnet_run_binlog(iter_binlog)
 
                 # Measure startup
                 ms = measure_startup_fn(packagename, activityname)
@@ -1084,9 +1094,13 @@ ex: C:\repos\performance;C:\repos\runtime
                     iter_data = json.load(f)
                 test_obj = iter_data["tests"][0]
                 counters = test_obj["counters"]
-                # Return test metadata (without counters) for building the final report
-                test_metadata = test_obj.copy()
-                test_metadata["counters"] = []
+                # Capture top-level metadata (build, os, run, inLab) so the
+                # final aggregated report has the same shape as the first
+                # report — PerfLab needs these to classify the upload.
+                test_metadata = {
+                    "test": {**test_obj, "counters": []},
+                    "top_level": {k: v for k, v in iter_data.items() if k != "tests"},
+                }
 
                 # Clean up temp report (leave binlog for later cleanup)
                 if os.path.exists(iter_report):
@@ -1100,31 +1114,28 @@ ex: C:\repos\performance;C:\repos\runtime
             os.makedirs(const.TRACEDIR, exist_ok=True)
             first_binlog = os.path.join(const.TRACEDIR, 'first-build-and-deploy.binlog')
 
-            # Build the base MSBuild command. `dotnet run -p:WaitForExit=false`
-            # chains Build → Install → _Run in a single MSBuild invocation,
-            # mirroring the VS Code F5 path (see dotnet/android
-            # build-properties.md:1827-1843). WaitForExit=false returns once the
-            # activity is launched instead of blocking on logcat.
+            # Build the base MSBuild command.
             base_cmd = ['dotnet', 'run', '--project', self.csprojpath, '-p:WaitForExit=false', '--no-restore', '-c', self.configuration, '-f', self.framework]
             if self.msbuildargs:
+                # Split on semicolons and whitespace. NOTE: MSBuild args with
+                # embedded spaces (e.g. /p:Foo="a b") will be shredded; all
+                # current callers pass only /p:Key=Value forms without spaces.
                 for arg in re.split(r'[;\s]+', self.msbuildargs):
                     if arg.strip():
                         base_cmd.append(arg.strip())
 
             # --- First build + deploy ---
-            # AndroidHelper is instantiated here (before first_cmd) so we can
-            # wake the screen and clear logcat BEFORE dotnet run fires am start.
-            # Physical Helix CI devices have screens OFF; ActivityTaskManager
-            # only emits 'Displayed' when the screen is on.
+            # Normalize device state BEFORE the first build so the first sample is measured under the same conditions as incrementals.
+            # Activity resolution is deferred until after install (requires the APK to be on the device).
             androidHelper = AndroidHelper()
             try:
                 first_cmd = base_cmd + [f'-bl:{first_binlog}']
                 getLogger().info("First build+deploy: %s" % ' '.join(first_cmd))
-                # Wake screen before first launch so ActivityTaskManager logs the 'Displayed' line.
-                # Physical Helix CI devices have screens OFF; Displayed is never logged with screen off.
+                androidHelper.setup_device(self.packagename, packagepath=None, animationsdisabled=True, skip_install=True, skip_xharness_warmup=True, skip_package_verifier=True, skip_test_launch=True, screen_timeout_ms=self.screentimeoutms)
                 androidHelper.ensure_screen_on()
                 androidHelper.clear_logcat()
                 subprocess.run(first_cmd, check=True)
+                remove_dotnet_run_binlog(first_binlog)
 
                 # Capture SDK versions from the just-built output. Other Android
                 # scenarios do this in pre.py on the build machine, but our first
@@ -1164,11 +1175,16 @@ ex: C:\repos\performance;C:\repos\runtime
                     # Never let version capture regress the measurement pipeline.
                     getLogger().warning("Version capture failed, continuing without versions.json: %s" % ex)
 
-                # --- Device setup for physical devices (animations, screen timeout, activity resolution) ---
-                # Note: ensure_screen_on() was already called above before the first deploy.
-                androidHelper.setup_device(self.packagename, packagepath=None, animationsdisabled=True, skip_install=True, skip_xharness_warmup=True, skip_package_verifier=True, skip_test_launch=True, screen_timeout_ms=self.screentimeoutms)
-
-                activityname = androidHelper.activityname
+                # --- Resolve activity (requires app installed by first_cmd) ---
+                getLogger().info("Resolving launchable activity after first install.")
+                resolve_cmd = xharness_adb() + [
+                    'shell',
+                    f'cmd package resolve-activity --brief {self.packagename} | tail -n 1'
+                ]
+                resolve_result = RunCommand(resolve_cmd, verbose=True)
+                resolve_result.run()
+                activityname = resolve_result.stdout.strip()
+                androidHelper.activityname = activityname
                 getLogger().info("Using resolved activity: %s" % activityname)
 
                 # --- First startup measurement (logcat-based) ---
@@ -1216,13 +1232,17 @@ ex: C:\repos\performance;C:\repos\runtime
                 report_template = None   # test metadata from first parsed report
                 intermediate_files = []  # files to clean up
 
+                def pre_iteration():
+                    androidHelper.ensure_screen_on()
+                    androidHelper.clear_logcat()
+
                 for iteration in range(1, num_iterations + 1):
                     ms, counters, iter_binlog, test_metadata = run_incremental_iteration(
                         iteration, num_iterations, base_cmd,
                         edit_pairs,
                         self.packagename, activityname, scenarioprefix, startup, self.traits,
                         androidHelper.measure_startup_from_logcat,
-                        pre_launch_fn=androidHelper.clear_logcat)
+                        pre_launch_fn=pre_iteration)
 
                     incremental_startup_results.append(ms)
                     intermediate_files.append(iter_binlog)
@@ -1248,7 +1268,7 @@ ex: C:\repos\performance;C:\repos\runtime
                 incremental_e2e_report = os.path.join(const.TRACEDIR, 'incremental-debug-e2e-perf-lab-report.json')
                 final_counters = list(aggregated_counters.values())
                 final_counters.append({
-                    "name": "Time to Main",
+                    "name": "Time to Displayed",
                     "topCounter": True,
                     "defaultCounter": False,
                     "higherIsBetter": False,
@@ -1256,8 +1276,11 @@ ex: C:\repos\performance;C:\repos\runtime
                     "results": incremental_startup_results
                 })
                 if report_template is not None:
-                    report_template["counters"] = final_counters
-                    final_report_data = {"tests": [report_template]}
+                    report_template["test"]["counters"] = final_counters
+                    final_report_data = {
+                        **report_template["top_level"],
+                        "tests": [report_template["test"]],
+                    }
                 else:
                     # Fallback: should not happen if at least 1 iteration ran
                     final_report_data = {"tests": [{"counters": final_counters}]}

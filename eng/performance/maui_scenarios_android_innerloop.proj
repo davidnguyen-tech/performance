@@ -16,11 +16,11 @@
     <_MSBuildArgs Condition="'$(RuntimeFlavor)' == 'mono'">/p:UseMonoRuntime=true</_MSBuildArgs>
     <_MSBuildArgs Condition="'$(RuntimeFlavor)' == 'coreclr'">/p:UseMonoRuntime=false</_MSBuildArgs>
 
-    <!-- CoreCLR JIT (all inner loop runs use codeGenType=Default; AOT/R2R/NativeAOT are unused) -->
-    <_MSBuildArgs Condition="'$(RuntimeFlavor)' == 'coreclr' and '$(CodegenType)' == 'JIT'">$(_MSBuildArgs) /p:PublishReadyToRun=false /p:PublishReadyToRunComposite=false</_MSBuildArgs>
+    <!-- CoreCLR: disable ReadyToRun so inner loop measures JIT behavior -->
+    <_MSBuildArgs Condition="'$(RuntimeFlavor)' == 'coreclr'">$(_MSBuildArgs);/p:PublishReadyToRun=false;/p:PublishReadyToRunComposite=false</_MSBuildArgs>
 
     <!-- AndroidRid: defaults based on target OS but can be overridden.
-         Windows targets physical Pixel 8 (ARM64); Linux targets x86_64 emulator. -->
+         Windows targets physical devices; Linux targets emulators. -->
     <AndroidRid Condition="'$(AndroidRid)' == '' and '$(TargetsWindows)' == 'true'">android-arm64</AndroidRid>
     <AndroidRid Condition="'$(AndroidRid)' == '' and '$(TargetsWindows)' != 'true'">android-x64</AndroidRid>
     <_MSBuildArgs>$(_MSBuildArgs) /p:RuntimeIdentifier=$(AndroidRid)</_MSBuildArgs>
@@ -34,8 +34,8 @@
     <RunConfigsString>$(RuntimeFlavor)_$(CodegenType)</RunConfigsString>
     <InnerLoopIterations Condition="'$(InnerLoopIterations)' == ''">10</InnerLoopIterations>
     <!-- Screen timeout must be large enough so the display stays on for the entire scenario.
-         If the screen turns off mid-run, am start reports LaunchState: UNKNOWN and omits
-         TotalTime, which breaks cold startup measurement. -->
+         If the screen turns off mid-run, ActivityTaskManager never emits the 'Displayed' line
+         and measure_startup_from_logcat will time out. -->
     <ScreenTimeoutMs Condition="'$(ScreenTimeoutMs)' == ''">1800000</ScreenTimeoutMs>
   </PropertyGroup>
 

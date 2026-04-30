@@ -27,7 +27,6 @@ class AndroidHelper:
             raise Exception("packagepath is required when skip_install is False")
 
         run_split_regex = r":\s(.+)"
-        self.screenwasoff = False
         self.packagename = packagename
 
         if not skip_xharness_warmup:
@@ -196,6 +195,12 @@ class AndroidHelper:
             # Test run to check if permissions are needed
             getLogger().info("Test run to check if permissions are needed")
 
+            keyInputCmd = xharness_adb() + [
+                'shell',
+                'input',
+                'keyevent'
+            ]
+
             # -W in the start command waits for the app to finish initial draw.
             self.startappcommand = xharness_adb() + [
                 'shell',
@@ -277,9 +282,7 @@ class AndroidHelper:
         if "mInteractive=false" in checkScreenOn.stdout:
             # Turn on the screen to make interactive and see if it worked
             getLogger().info("Screen was off, turning on.")
-            # Guard so a second call doesn't overwrite a True we already set.
-            if not self.screenwasoff:
-                self.screenwasoff = True
+            self.screenwasoff = True
             RunCommand(keyInputCmd + ['26'], verbose=True).run()  # Press the power key
             RunCommand(keyInputCmd + ['82'], verbose=True).run()  # Unlock with menu key (no-op on password lock)
 
@@ -380,13 +383,6 @@ class AndroidHelper:
                 self.packagename
             ]
             RunCommand(uninstallAppCmd, verbose=True).run()
-
-        
-        keyInputCmd = xharness_adb() + [
-            'shell',
-            'input',
-            'keyevent'
-        ]
 
         # Restore Android package verifier settings
         try:

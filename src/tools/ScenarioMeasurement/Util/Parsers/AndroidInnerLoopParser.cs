@@ -18,7 +18,7 @@ public class AndroidInnerLoopParser : IParser
 
     public IEnumerable<Counter> Parse(string binlogFile, string processName, IList<int> pids, string commandLine)
     {
-        var publishTimes = new List<double>();
+        var buildDeployTimes = new List<double>();
 
         // Build tasks (compilation)
         var cscTimes = new List<double>();
@@ -131,75 +131,46 @@ public class AndroidInnerLoopParser : IParser
                     buildApkFastDevTargetTimes.Add(s);
             }
 
-            publishTimes.Add(build.Duration.TotalMilliseconds / 1000.0);
+            buildDeployTimes.Add(build.Duration.TotalMilliseconds / 1000.0);
         }
 
         // Overall duration
-        if (publishTimes.Count > 0)
-            yield return new Counter { Name = "Build+Deploy Time", MetricName = "s", DefaultCounter = true, TopCounter = true, Results = publishTimes.ToArray() };
+        yield return new Counter { Name = "Build+Deploy Time", MetricName = "s", DefaultCounter = true, TopCounter = true, Results = buildDeployTimes.ToArray() };
 
         // Build task counters
-        if (cscTimes.Count > 0)
-            yield return new Counter { Name = "Csc Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = cscTimes.ToArray() };
-        if (xamlCTimes.Count > 0)
-            yield return new Counter { Name = "XamlC Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = xamlCTimes.ToArray() };
-        if (generateJavaStubsTimes.Count > 0)
-            yield return new Counter { Name = "GenerateJavaStubs Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = generateJavaStubsTimes.ToArray() };
-        if (linkAssembliesNoShrinkTimes.Count > 0)
-            yield return new Counter { Name = "LinkAssembliesNoShrink Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = linkAssembliesNoShrinkTimes.ToArray() };
-        if (d8Times.Count > 0)
-            yield return new Counter { Name = "D8 Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = d8Times.ToArray() };
-        if (javacTimes.Count > 0)
-            yield return new Counter { Name = "Javac Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = javacTimes.ToArray() };
-        if (generateTypeMappingsTimes.Count > 0)
-            yield return new Counter { Name = "GenerateTypeMappings Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = generateTypeMappingsTimes.ToArray() };
-        if (processAssembliesTimes.Count > 0)
-            yield return new Counter { Name = "ProcessAssemblies Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = processAssembliesTimes.ToArray() };
-        if (generateJavaCallableWrappersTimes.Count > 0)
-            yield return new Counter { Name = "GenerateJavaCallableWrappers Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = generateJavaCallableWrappersTimes.ToArray() };
-        if (filterAssembliesTimes.Count > 0)
-            yield return new Counter { Name = "FilterAssemblies Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = filterAssembliesTimes.ToArray() };
-        if (waitForAppDetectionTimes.Count > 0)
-            yield return new Counter { Name = "WaitForAppDetection Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = waitForAppDetectionTimes.ToArray() };
-        if (generateMainAndroidManifestTimes.Count > 0)
-            yield return new Counter { Name = "GenerateMainAndroidManifest Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = generateMainAndroidManifestTimes.ToArray() };
-        if (resolveSdksTimes.Count > 0)
-            yield return new Counter { Name = "ResolveSdks Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = resolveSdksTimes.ToArray() };
-        if (generateNativeApplicationConfigSourcesTimes.Count > 0)
-            yield return new Counter { Name = "GenerateNativeApplicationConfigSources Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = generateNativeApplicationConfigSourcesTimes.ToArray() };
+        yield return new Counter { Name = "Csc Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = cscTimes.ToArray() };
+        yield return new Counter { Name = "XamlC Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = xamlCTimes.ToArray() };
+        yield return new Counter { Name = "GenerateJavaStubs Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = generateJavaStubsTimes.ToArray() };
+        yield return new Counter { Name = "LinkAssembliesNoShrink Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = linkAssembliesNoShrinkTimes.ToArray() };
+        yield return new Counter { Name = "D8 Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = d8Times.ToArray() };
+        yield return new Counter { Name = "Javac Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = javacTimes.ToArray() };
+        yield return new Counter { Name = "GenerateTypeMappings Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = generateTypeMappingsTimes.ToArray() };
+        yield return new Counter { Name = "ProcessAssemblies Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = processAssembliesTimes.ToArray() };
+        yield return new Counter { Name = "GenerateJavaCallableWrappers Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = generateJavaCallableWrappersTimes.ToArray() };
+        yield return new Counter { Name = "FilterAssemblies Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = filterAssembliesTimes.ToArray() };
+        yield return new Counter { Name = "WaitForAppDetection Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = waitForAppDetectionTimes.ToArray() };
+        yield return new Counter { Name = "GenerateMainAndroidManifest Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = generateMainAndroidManifestTimes.ToArray() };
+        yield return new Counter { Name = "ResolveSdks Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = resolveSdksTimes.ToArray() };
+        yield return new Counter { Name = "GenerateNativeApplicationConfigSources Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = generateNativeApplicationConfigSourcesTimes.ToArray() };
 
         // Build target counters
-        if (coreCompileTargetTimes.Count > 0)
-            yield return new Counter { Name = "CoreCompile Target Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = coreCompileTargetTimes.ToArray() };
-        if (xamlCTargetTimes.Count > 0)
-            yield return new Counter { Name = "XamlC Target Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = xamlCTargetTimes.ToArray() };
-        if (generateJavaStubsTargetTimes.Count > 0)
-            yield return new Counter { Name = "_GenerateJavaStubs Target Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = generateJavaStubsTargetTimes.ToArray() };
-        if (linkAssembliesNoShrinkTargetTimes.Count > 0)
-            yield return new Counter { Name = "_LinkAssembliesNoShrink Target Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = linkAssembliesNoShrinkTargetTimes.ToArray() };
-        if (compileToDalvikTargetTimes.Count > 0)
-            yield return new Counter { Name = "_CompileToDalvik Target Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = compileToDalvikTargetTimes.ToArray() };
-        if (compileJavaTargetTimes.Count > 0)
-            yield return new Counter { Name = "_CompileJava Target Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = compileJavaTargetTimes.ToArray() };
+        yield return new Counter { Name = "CoreCompile Target Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = coreCompileTargetTimes.ToArray() };
+        yield return new Counter { Name = "XamlC Target Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = xamlCTargetTimes.ToArray() };
+        yield return new Counter { Name = "_GenerateJavaStubs Target Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = generateJavaStubsTargetTimes.ToArray() };
+        yield return new Counter { Name = "_LinkAssembliesNoShrink Target Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = linkAssembliesNoShrinkTargetTimes.ToArray() };
+        yield return new Counter { Name = "_CompileToDalvik Target Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = compileToDalvikTargetTimes.ToArray() };
+        yield return new Counter { Name = "_CompileJava Target Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = compileJavaTargetTimes.ToArray() };
 
         // Deploy target counters
-        if (signTargetTimes.Count > 0)
-            yield return new Counter { Name = "_Sign Target Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = signTargetTimes.ToArray() };
-        if (uploadTargetTimes.Count > 0)
-            yield return new Counter { Name = "_Upload Target Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = uploadTargetTimes.ToArray() };
-        if (deployApkTargetTimes.Count > 0)
-            yield return new Counter { Name = "_DeployApk Target Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = deployApkTargetTimes.ToArray() };
-        if (buildApkFastDevTargetTimes.Count > 0)
-            yield return new Counter { Name = "_BuildApkFastDev Target Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = buildApkFastDevTargetTimes.ToArray() };
+        yield return new Counter { Name = "_Sign Target Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = signTargetTimes.ToArray() };
+        yield return new Counter { Name = "_Upload Target Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = uploadTargetTimes.ToArray() };
+        yield return new Counter { Name = "_DeployApk Target Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = deployApkTargetTimes.ToArray() };
+        yield return new Counter { Name = "_BuildApkFastDev Target Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = buildApkFastDevTargetTimes.ToArray() };
 
         // Task-level counters (granular)
-        if (fastDeployTimes.Count > 0)
-            yield return new Counter { Name = "FastDeploy Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = fastDeployTimes.ToArray() };
-        if (androidSignPackageTimes.Count > 0)
-            yield return new Counter { Name = "AndroidSignPackage Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = androidSignPackageTimes.ToArray() };
-        if (androidApkSignerTimes.Count > 0)
-            yield return new Counter { Name = "AndroidApkSigner Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = androidApkSignerTimes.ToArray() };
-        if (aapt2LinkTimes.Count > 0)
-            yield return new Counter { Name = "Aapt2Link Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = aapt2LinkTimes.ToArray() };
+        yield return new Counter { Name = "FastDeploy Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = fastDeployTimes.ToArray() };
+        yield return new Counter { Name = "AndroidSignPackage Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = androidSignPackageTimes.ToArray() };
+        yield return new Counter { Name = "AndroidApkSigner Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = androidApkSignerTimes.ToArray() };
+        yield return new Counter { Name = "Aapt2Link Task Time", MetricName = "s", DefaultCounter = false, TopCounter = true, Results = aapt2LinkTimes.ToArray() };
     }
 }

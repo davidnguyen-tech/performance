@@ -3,6 +3,7 @@
 
 import os
 import platform
+import re
 import stat
 import subprocess
 import sys
@@ -77,7 +78,7 @@ def _setup_adb_windows(android_home):
     device_count = _count_adb_devices()
     log(f"Device count: {device_count}")
     if device_count == 0:
-        log("WARNING: No devices detected — build -t:Install will likely fail")
+        log("WARNING: No devices detected — dotnet run will likely fail")
 
 
 def _setup_adb_linux():
@@ -91,18 +92,23 @@ def _setup_adb_linux():
     device_count = _count_adb_devices()
     log(f"Device count: {device_count}")
     if device_count == 0:
-        log("WARNING: No devices detected — build -t:Install will likely fail")
+        log("WARNING: No devices detected — dotnet run will likely fail")
         return
     # Wait for emulator boot
     log("Waiting for emulator to fully boot (up to 60s)...")
     boot_wait = 0
     boot_completed = ""
     while boot_wait < 60:
-        result = subprocess.run(
-            ["adb", "shell", "getprop", "sys.boot_completed"],
-            capture_output=True, text=True,
-        )
-        boot_completed = result.stdout.strip()
+        try:
+            result = subprocess.run(
+                ["adb", "shell", "getprop", "sys.boot_completed"],
+                capture_output=True, text=True,
+                timeout=10,
+            )
+            boot_completed = result.stdout.strip()
+        except subprocess.TimeoutExpired:
+            log("  adb getprop timed out after 10s; retrying")
+            boot_completed = ""
         if boot_completed == "1":
             log(f"Emulator fully booted after {boot_wait}s")
             break
@@ -268,7 +274,7 @@ def restore_packages(ctx):
         f"/p:TargetFrameworks={ctx['framework']}",
     ]
     if ctx["msbuild_args"]:
-        restore_args.extend(ctx["msbuild_args"].split())
+        restore_args.extend(arg for arg in re.split(r'[;\s]+', ctx["msbuild_args"]) if arg)
     result = run_cmd(restore_args, check=False)
     if result.returncode != 0:
         log(f"STEP 2 FAILED with exit code {result.returncode}", tee=True)
