@@ -1131,7 +1131,7 @@ ex: C:\repos\performance;C:\repos\runtime
             try:
                 first_cmd = base_cmd + [f'-bl:{first_binlog}']
                 getLogger().info("First build+deploy: %s" % ' '.join(first_cmd))
-                androidHelper.setup_device(self.packagename, packagepath=None, animationsdisabled=True, skip_install=True, skip_xharness_warmup=True, skip_test_launch=True, screen_timeout_ms=self.screentimeoutms)
+                androidHelper.setup_device(self.packagename, packagepath=None, animationsdisabled=True, skip_install=True, skip_xharness_warmup=True, skip_package_verifier=True, skip_test_launch=True, screen_timeout_ms=self.screentimeoutms)
                 androidHelper.ensure_screen_on()
                 androidHelper.clear_logcat()
                 subprocess.run(first_cmd, check=True)
