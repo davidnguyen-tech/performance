@@ -178,8 +178,8 @@ ex: C:\repos\performance;C:\repos\runtime
         androidinnerloopparser = subparsers.add_parser(const.ANDROIDINNERLOOP,
                                                  description='measure first and incremental deploy time via binlogs')
         androidinnerloopparser.add_argument('--csproj-path', help='Path to .csproj file to build', dest='csprojpath', required=True)
-        androidinnerloopparser.add_argument('--edit-src', help='Path to modified source file (copied before incremental deploy)', dest='editsrc', required=True)
-        androidinnerloopparser.add_argument('--edit-dest', help='Destination path for the modified file', dest='editdest', required=True)
+        androidinnerloopparser.add_argument('--edit-src', help='Semicolon-separated path(s) to modified source file(s) copied before each incremental deploy. Each entry pairs positionally with the same-index --edit-dest entry.', dest='editsrc', required=True)
+        androidinnerloopparser.add_argument('--edit-dest', help='Semicolon-separated destination path(s) for the modified file(s). Must contain the same number of entries as --edit-src.', dest='editdest', required=True)
         androidinnerloopparser.add_argument('--framework', '-f', help='Target framework (e.g., net10.0-android)', dest='framework', required=True)
         androidinnerloopparser.add_argument('--configuration', '-c', help='Build configuration', dest='configuration', required=True)
         androidinnerloopparser.add_argument('--msbuild-args', help='Additional MSBuild arguments', dest='msbuildargs', default='')
@@ -1131,7 +1131,7 @@ ex: C:\repos\performance;C:\repos\runtime
             try:
                 first_cmd = base_cmd + [f'-bl:{first_binlog}']
                 getLogger().info("First build+deploy: %s" % ' '.join(first_cmd))
-                androidHelper.setup_device(self.packagename, packagepath=None, animationsdisabled=True, skip_install=True, skip_xharness_warmup=True, skip_package_verifier=True, skip_test_launch=True, screen_timeout_ms=self.screentimeoutms)
+                androidHelper.setup_device(self.packagename, packagepath=None, animationsdisabled=True, skip_install=True, skip_xharness_warmup=True, skip_test_launch=True, screen_timeout_ms=self.screentimeoutms)
                 androidHelper.ensure_screen_on()
                 androidHelper.clear_logcat()
                 subprocess.run(first_cmd, check=True)
