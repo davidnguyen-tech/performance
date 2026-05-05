@@ -448,17 +448,23 @@ class iOSHelper:
             getLogger().info("Launched %s with PID %d", bundle_id, pid)
             # Stabilization check: the app should still be alive 2s
             # later. If not, the launch was a crash, not a real start.
+            #
+            # iOS Simulator apps run as real macOS processes (sandboxed
+            # but in the host's process table — the PID returned by
+            # `simctl launch` IS the host PID), so we use host `ps -p`
+            # for the check. The simulator's userland does NOT include
+            # /bin/ps, so `simctl spawn <UDID> ps` would fail with
+            # ENOENT regardless of whether the app is alive.
             time.sleep(2.0)
             check = subprocess.run(
-                ['xcrun', 'simctl', 'spawn', self.device_id,
-                 'ps', '-p', str(pid)],
+                ['ps', '-p', str(pid), '-o', 'pid='],
                 capture_output=True, text=True, timeout=15,
             )
             if check.returncode != 0 or str(pid) not in (check.stdout or ''):
                 self._dump_simulator_diagnostics(bundle_id)
                 raise RuntimeError(
                     f"App {bundle_id} (PID {pid}) crashed within 2s of "
-                    f"launch; simctl spawn ps -p exit "
+                    f"launch; host ps -p exit "
                     f"{check.returncode}, output: "
                     f"{(check.stdout or '').strip()!r}")
 
@@ -497,7 +503,9 @@ class iOSHelper:
         for cmd in (
             ['xcrun', 'simctl', 'list', 'devices', self.device_id],
             ['xcrun', 'simctl', 'listapps', self.device_id],
-            ['xcrun', 'simctl', 'spawn', self.device_id, 'ps', '-A'],
+            # iOS sim has no /bin/ps; query the host process table for
+            # any descendants of the simulator hosting the bundle id.
+            ['ps', '-A', '-o', 'pid,ppid,command'],
         ):
             try:
                 r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
