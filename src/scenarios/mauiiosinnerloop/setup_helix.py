@@ -358,86 +358,235 @@ def validate_simulator_runtimes():
             "Simulator-based testing will fail.", tee=True)
 
 
-def _find_latest_iphone_simulator():
-    """Find the latest available iPhone simulator device name.
+# Preferred iPhone device types in priority order. Used to pick a device type
+# when creating our own simulator. We prefer plain models over Pro/Pro Max for
+# predictable performance characteristics, and skip mini/SE variants because
+# their availability across Xcode versions is inconsistent. The list is wide
+# enough to survive Xcode/runtime upgrades on Helix machines.
+_PREFERRED_IPHONE_MODELS = [
+    "iPhone 17", "iPhone 17 Pro", "iPhone 17 Pro Max", "iPhone Air",
+    "iPhone 16", "iPhone 16 Pro", "iPhone 16 Pro Max", "iPhone 16 Plus",
+    "iPhone 15", "iPhone 15 Pro", "iPhone 15 Pro Max", "iPhone 15 Plus",
+    "iPhone 14", "iPhone 14 Pro", "iPhone 14 Pro Max", "iPhone 14 Plus",
+    "iPhone 13", "iPhone 13 Pro", "iPhone 13 Pro Max",
+    "iPhone 12", "iPhone 12 Pro", "iPhone 12 Pro Max",
+    "iPhone 11", "iPhone 11 Pro", "iPhone 11 Pro Max",
+]
 
-    Parses 'xcrun simctl list devices available' output to find iPhone devices
-    and returns the last one (typically the latest model).
-    Returns the device name string, or None if none found.
+
+def _find_ios_runtime():
+    """Return the (identifier, version) of the highest-version available iOS runtime.
+
+    Returns ``(None, None)`` if no iOS runtime is available.
     """
-    import re
-    result = run_cmd(["xcrun", "simctl", "list", "devices", "available"], check=False)
+    result = run_cmd(["xcrun", "simctl", "list", "runtimes", "-j"], check=False)
+    if result.returncode != 0 or not result.stdout:
+        return (None, None)
+
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        log(f"WARNING: Failed to parse runtimes JSON: {e}")
+        return (None, None)
+
+    available = []
+    for rt in data.get("runtimes", []):
+        if not rt.get("isAvailable"):
+            continue
+        name = rt.get("name", "")
+        if "iOS" not in name:
+            continue
+        identifier = rt.get("identifier", "")
+        version = rt.get("version", "0")
+        available.append((identifier, version, name))
+
+    if not available:
+        return (None, None)
+
+    # Sort by version (descending) so the latest iOS runtime wins. version
+    # strings like "26.4.1" sort correctly with packaging-style key, but we
+    # only need a stable preference for the latest, so simple tuple sort works.
+    def _version_key(item):
+        try:
+            return tuple(int(p) for p in item[1].split(".") if p.isdigit())
+        except Exception:
+            return (0,)
+
+    available.sort(key=_version_key, reverse=True)
+    rt_id, rt_ver, rt_name = available[0]
+    log(f"Selected iOS runtime: {rt_name} (id={rt_id}, version={rt_ver})", tee=True)
+    return (rt_id, rt_ver)
+
+
+def _find_iphone_device_type():
+    """Return the identifier of a usable iPhone simulator device type.
+
+    Walks ``_PREFERRED_IPHONE_MODELS`` in order and returns the identifier of
+    the first model present in ``simctl list devicetypes -j``. Returns ``None``
+    if none of the preferred models are available.
+    """
+    result = run_cmd(["xcrun", "simctl", "list", "devicetypes", "-j"], check=False)
     if result.returncode != 0 or not result.stdout:
         return None
 
-    # Match lines like "    iPhone 16 Pro Max (UUID) (Shutdown)"
-    iphone_names = []
-    for line in result.stdout.splitlines():
-        m = re.match(r'\s+(iPhone[^(]*?)\s+\(', line)
-        if m:
-            iphone_names.append(m.group(1).strip())
-
-    if not iphone_names:
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        log(f"WARNING: Failed to parse devicetypes JSON: {e}")
         return None
 
-    # Return the last match — simctl lists devices in order, so the last
-    # iPhone entry is typically the latest model.
-    return iphone_names[-1]
+    by_name = {dt.get("name", ""): dt.get("identifier", "")
+               for dt in data.get("devicetypes", [])}
+    for model in _PREFERRED_IPHONE_MODELS:
+        if model in by_name and by_name[model]:
+            log(f"Selected iPhone device type: {model} (id={by_name[model]})", tee=True)
+            return by_name[model]
+
+    log(f"WARNING: None of the preferred iPhone models are installed. "
+        f"Available iPhones: {[n for n in by_name if n.startswith('iPhone')]}",
+        tee=True)
+    return None
 
 
-def boot_simulator(device_name):
-    """Boot the target iOS simulator device.
+def _unique_simulator_name():
+    """Build a per-workitem unique simulator name to avoid collisions.
 
-    Handles the case where the device is already booted (exit code 149
-    from simctl boot = "Unable to boot device in current state: Booted").
-    If the requested device fails to boot, tries the latest available iPhone
-    simulator as a fallback. Exits with code 1 if no simulator can be booted.
+    Each Helix work item gets its own name so concurrent work items on the
+    same machine never share or delete each other's simulators.
     """
-    log_raw("=== SIMULATOR BOOT ===", tee=True)
-    log(f"Booting simulator device: '{device_name}'", tee=True)
+    workitem_id = (os.environ.get("HELIX_WORKITEM_ID") or
+                   os.environ.get("HELIX_WORKITEM_FRIENDLYNAME") or
+                   "")
+    if workitem_id:
+        # Strip filesystem-unfriendly chars from friendly names like
+        # "Inner Loop Simulator - MAUI iOS Inner Loop"
+        suffix = re.sub(r"[^A-Za-z0-9_-]+", "-", workitem_id).strip("-")[:48]
+    else:
+        # Fallback: epoch + PID. Still unique within a single machine session.
+        suffix = f"{int(datetime.now().timestamp())}-{os.getpid()}"
+    return f"PerfTest-iPhone-{suffix}"
 
+
+def _write_sim_udid(workitem_root, udid):
+    """Persist the UDID of the simulator we created so test.py / post.py can
+    read it. Without this, ioshelper would fall back to "first booted device"
+    which is unsafe if any other simulator happens to be booted.
+    """
+    path = os.path.join(workitem_root, "sim_udid.txt")
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(udid + "\n")
+        log(f"Wrote simulator UDID to {path}", tee=True)
+    except OSError as e:
+        log(f"WARNING: Could not write {path}: {e}", tee=True)
+
+
+def _simulator_preflight(udid):
+    """Verify the booted simulator is actually usable for spawning processes.
+
+    The CoreSimulator daemon can list a device as "Booted" while still
+    refusing to spawn agents (for example when the device's underlying data
+    container is owned by a different user — the failure mode that breaks
+    actool's AssetCatalogSimulatorAgent during ``dotnet build``).
+    Running ``simctl spawn <udid> /usr/bin/true`` proves end-to-end that we
+    can launch processes inside the simulator under the current user.
+    Raises ``SystemExit(1)`` if the spawn fails.
+    """
+    log(f"Preflight: spawning /usr/bin/true inside simulator {udid}", tee=True)
     result = run_cmd(
-        ["xcrun", "simctl", "boot", device_name],
+        ["xcrun", "simctl", "spawn", udid, "/usr/bin/true"],
         check=False,
     )
+    if result.returncode != 0:
+        log(f"ERROR: simctl spawn preflight failed (exit {result.returncode}). "
+            f"CoreSimulator cannot launch processes in this device. "
+            f"actool / mlaunch will also fail.", tee=True)
+        _dump_log()
+        sys.exit(1)
+    log("Preflight OK — simulator can spawn processes.", tee=True)
 
-    if result.returncode == 0:
-        log(f"Simulator '{device_name}' booted successfully.")
-    elif "Booted" in (result.stdout or "") or result.returncode == 149:
-        # Already booted — not an error
-        log(f"Simulator '{device_name}' is already booted (OK).")
-    else:
-        log(f"Failed to boot simulator '{device_name}' "
-            f"(exit code {result.returncode}). "
-            "Trying dynamic fallback...", tee=True)
 
-        # Try to find and boot the latest available iPhone simulator
-        fallback = _find_latest_iphone_simulator()
-        if fallback and fallback != device_name:
-            log(f"Attempting fallback device: '{fallback}'", tee=True)
-            fb_result = run_cmd(
-                ["xcrun", "simctl", "boot", fallback],
-                check=False,
-            )
-            if fb_result.returncode == 0:
-                log(f"Fallback simulator '{fallback}' booted successfully.", tee=True)
-            elif "Booted" in (fb_result.stdout or "") or fb_result.returncode == 149:
-                log(f"Fallback simulator '{fallback}' is already booted (OK).", tee=True)
-            else:
-                log(f"ERROR: Fallback simulator '{fallback}' also failed to boot "
-                    f"(exit code {fb_result.returncode}).", tee=True)
-                run_cmd(["xcrun", "simctl", "list", "devices", "available"], check=False)
-                _dump_log()
-                sys.exit(1)
-        else:
-            log("ERROR: No fallback iPhone simulator found. Available devices:", tee=True)
-            run_cmd(["xcrun", "simctl", "list", "devices", "available"], check=False)
-            _dump_log()
-            sys.exit(1)
+def create_and_boot_simulator(workitem_root):
+    """Create a fresh iPhone simulator under the current user's CoreSimulator
+    namespace and boot it.
 
-    # Log booted devices for confirmation
+    Why a fresh device every run:
+      Helix machines accumulate simulator devices across runs. When those
+      pre-existing devices are owned by a different user (root, or a previous
+      tenant), ``simctl boot`` on them fails with NSCocoaErrorDomain code 513
+      ("You don't have permission to save the file ... in the folder
+      CoreSimulator"). Creating our own device with ``simctl create`` writes
+      to ``~/Library/Developer/CoreSimulator/Devices/`` of THIS user, so we
+      always have a writable device to boot.
+
+    Why both simulator AND device jobs need this:
+      ``dotnet build`` for ios-arm64 invokes ``actool`` which spawns
+      ``AssetCatalogSimulatorAgent`` via CoreSimulator to compile the asset
+      catalog. Without a writable, booted simulator under our user, that
+      spawn fails and the build aborts.
+
+    Returns the UDID of the booted device. Persists it to
+    ``<workitem_root>/sim_udid.txt`` for test.py / post.py to read.
+    Exits with code 1 on any unrecoverable failure.
+    """
+    log_raw("=== SIMULATOR CREATE & BOOT ===", tee=True)
+
+    runtime_id, _ = _find_ios_runtime()
+    if not runtime_id:
+        log("ERROR: No available iOS simulator runtime found.", tee=True)
+        run_cmd(["xcrun", "simctl", "list", "runtimes"], check=False)
+        _dump_log()
+        sys.exit(1)
+
+    device_type_id = _find_iphone_device_type()
+    if not device_type_id:
+        log("ERROR: No usable iPhone simulator device type found.", tee=True)
+        run_cmd(["xcrun", "simctl", "list", "devicetypes"], check=False)
+        _dump_log()
+        sys.exit(1)
+
+    name = _unique_simulator_name()
+    log(f"Creating simulator: name='{name}' type={device_type_id} runtime={runtime_id}",
+        tee=True)
+    create = run_cmd(
+        ["xcrun", "simctl", "create", name, device_type_id, runtime_id],
+        check=False,
+    )
+    if create.returncode != 0 or not create.stdout:
+        log(f"ERROR: simctl create failed (exit {create.returncode}).", tee=True)
+        _dump_log()
+        sys.exit(1)
+
+    # `simctl create` prints just the UDID on stdout (one line).
+    udid = (create.stdout or "").strip().splitlines()[-1].strip()
+    if not re.match(r"^[0-9A-Fa-f-]{36}$", udid):
+        log(f"ERROR: simctl create produced unexpected output: {create.stdout!r}",
+            tee=True)
+        _dump_log()
+        sys.exit(1)
+    log(f"Created simulator UDID: {udid}", tee=True)
+
+    log(f"Booting simulator {udid}", tee=True)
+    boot = run_cmd(["xcrun", "simctl", "boot", udid], check=False)
+    if boot.returncode != 0 and "Booted" not in (boot.stdout or ""):
+        log(f"ERROR: simctl boot failed (exit {boot.returncode}).", tee=True)
+        _dump_log()
+        sys.exit(1)
+
+    # Wait for the simulator to finish booting. Without this, downstream
+    # actool / mlaunch race against the boot and intermittently fail.
+    log(f"Waiting for boot to complete (simctl bootstatus -b)", tee=True)
+    bootstatus = run_cmd(["xcrun", "simctl", "bootstatus", udid, "-b"], check=False)
+    if bootstatus.returncode != 0:
+        log(f"WARNING: bootstatus reported exit {bootstatus.returncode}; "
+            f"continuing anyway and relying on preflight.", tee=True)
+
+    _simulator_preflight(udid)
+    _write_sim_udid(workitem_root, udid)
+
     log("Currently booted devices:")
     run_cmd(["xcrun", "simctl", "list", "devices", "booted"], check=False)
+    return udid
 
 
 def _run_workload_cmd(args, timeout_seconds):
@@ -731,9 +880,10 @@ def main():
         os.environ["IOS_RID"] = ios_rid
         log(f"Host architecture: {host_arch}, using IOS_RID={ios_rid}", tee=True)
 
-    # The simulator device name can be overridden via env var; default to
-    # "iPhone 16" which is available on current macOS Helix images.
-    device_name = os.environ.get("IOS_SIMULATOR_DEVICE", "iPhone 16")
+    # The simulator device name env var is no longer used: we always create
+    # our own fresh simulator under this user's CoreSimulator namespace via
+    # create_and_boot_simulator(). Pre-existing devices on Helix machines
+    # may belong to other users and refuse to boot with permission errors.
 
     # Framework and MSBuild args are passed as command-line arguments when
     # available (from the .proj PreCommands), or fall back to env vars.
@@ -763,7 +913,16 @@ def main():
     # _ValidateXcodeVersion fails.
     select_xcode(workitem_root)
 
-    # Step 3 & 4: Device-type-specific setup
+    # Step 3 & 4: Device-type-specific setup.
+    # Both job types create + boot a fresh simulator under THIS user's
+    # CoreSimulator namespace. Pre-existing simulators on the Helix machine
+    # may belong to other users (root or previous tenants) and refuse to boot
+    # with permission errors. Even physical-device builds need a writable
+    # simulator booted because actool spawns AssetCatalogSimulatorAgent via
+    # CoreSimulator during 'dotnet build' for ios-arm64.
+    validate_simulator_runtimes()
+    create_and_boot_simulator(workitem_root)
+
     if is_physical_device:
         # Detect and validate the connected physical device
         device_udid = detect_physical_device()
@@ -777,10 +936,6 @@ def main():
             # via iOSHelper.detect_connected_device().
             os.environ["IOS_DEVICE_UDID"] = device_udid
             log(f"IOS_DEVICE_UDID detected: {device_udid}", tee=True)
-    else:
-        # Simulator: validate runtimes and boot the device
-        validate_simulator_runtimes()
-        boot_simulator(device_name)
 
     # Step 5: Install the maui-ios workload
     # Must happen BEFORE restore because restore needs workload packs

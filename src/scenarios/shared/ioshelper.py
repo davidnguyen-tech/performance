@@ -140,12 +140,34 @@ class iOSHelper:
 
     @staticmethod
     def _resolve_booted_simulator_udid():
-        """Return the UDID of the first booted simulator.
+        """Return the UDID of the simulator we should target.
 
-        mlaunch requires a real UDID (--device :v2:udid=<uuid>); it does
-        not understand simctl's "booted" shortcut.  This method queries
-        ``simctl list devices booted`` to find the actual UDID.
+        Resolution order:
+          1. ``$HELIX_WORKITEM_ROOT/sim_udid.txt`` — written by setup_helix.py
+             after creating + booting our own per-workitem device. This pins
+             the UDID end-to-end so we never accidentally target a stale or
+             foreign device that happens to be booted on the machine.
+          2. ``simctl list devices booted -j`` — fallback for local runs (no
+             Helix) where setup_helix.py was not invoked.
+
+        mlaunch requires a real UDID (--device :v2:udid=<uuid>); it does not
+        understand simctl's "booted" shortcut.
         """
+        # Prefer the pinned UDID written by setup_helix.py
+        workitem_root = os.environ.get('HELIX_WORKITEM_ROOT')
+        if workitem_root:
+            pinned = os.path.join(workitem_root, 'sim_udid.txt')
+            if os.path.isfile(pinned):
+                try:
+                    with open(pinned, 'r', encoding='utf-8') as f:
+                        udid = f.read().strip()
+                    if udid:
+                        getLogger().info("Using pinned simulator UDID from %s: %s",
+                                         pinned, udid)
+                        return udid
+                except OSError as e:
+                    getLogger().warning("Could not read %s: %s", pinned, e)
+
         try:
             result = subprocess.run(
                 ['xcrun', 'simctl', 'list', 'devices', 'booted', '-j'],
@@ -161,6 +183,23 @@ class iOSHelper:
             return None
         except Exception:
             return None
+
+    @staticmethod
+    def delete_simulator(udid):
+        """Shutdown and delete a simulator by UDID. Best-effort, never raises.
+
+        Used by post.py to clean up the per-workitem simulator created in
+        setup_helix.py so devices don't accumulate across runs on the same
+        Helix machine.
+        """
+        if not udid:
+            return
+        for cmd in (['xcrun', 'simctl', 'shutdown', udid],
+                    ['xcrun', 'simctl', 'delete', udid]):
+            try:
+                subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            except Exception as e:
+                getLogger().warning("Cleanup '%s' failed: %s", ' '.join(cmd), e)
 
     # ── Unified Device Setup ─────────────────────────────────────────
 
