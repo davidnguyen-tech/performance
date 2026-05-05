@@ -87,10 +87,69 @@ def print_diagnostics():
     """Log environment variables useful for debugging Helix failures."""
     log_raw("=== DIAGNOSTICS ===", tee=True)
     for var in ["DOTNET_ROOT", "PATH", "DEVELOPER_DIR", "HELIX_WORKITEM_ROOT",
-                "HELIX_CORRELATION_PAYLOAD"]:
+                "HELIX_CORRELATION_PAYLOAD", "TMPDIR", "USER", "HOME"]:
         log_raw(f"  {var}={os.environ.get(var, '<not set>')}")
     log_raw(f"  macOS version:", tee=True)
     run_cmd(["sw_vers"], check=False)
+    log_raw(f"  whoami / id:", tee=True)
+    run_cmd(["id"], check=False)
+
+
+# CoreSimulator folders that may need to be owned by the current user before
+# 'simctl boot' can succeed. On shared Helix machines, these folders may
+# have accumulated state owned by a previous tenant (root, ado_agent, etc.),
+# which causes 'simctl boot' to fail with NSCocoaErrorDomain code 513
+# ("You don't have permission to save the file ... in the folder
+# CoreSimulator") — even for simulators we just created ourselves, because
+# the boot writes log/state files into shared CoreSimulator folders we
+# don't own.
+_CORESIMULATOR_PATHS = [
+    "/Library/Developer/CoreSimulator",
+    "/Library/Logs/CoreSimulator",
+    "~/Library/Developer/CoreSimulator",
+    "~/Library/Logs/CoreSimulator",
+    "~/Library/Caches/com.apple.CoreSimulator.SimulatorTrampoline",
+    "~/Library/Saved Application State/com.apple.CoreSimulator.CoreSimulatorService.savedState",
+]
+
+
+def fix_coresimulator_permissions():
+    """Take ownership of CoreSimulator folders so simctl boot can succeed.
+
+    Helix machines are shared; CoreSimulator folders may have accumulated
+    state owned by prior tenants. ``simctl boot`` writes log/state files
+    into several Library folders, and even a freshly-created device fails
+    to boot if any one of them is not writable by the current user. This
+    function ``sudo chown -R``s the relevant folders to the current user
+    so that boot, spawn, and shutdown all work. It is best-effort: paths
+    that don't exist are skipped, and chown failures are logged as warnings
+    so the rest of setup still runs (the boot itself will fail loudly with
+    diagnostics if permissions are still wrong).
+    """
+    log_raw("=== COREsimulator PERMISSIONS ===", tee=True)
+    user = os.environ.get("USER") or ""
+    if not user:
+        # Fallback: query the OS
+        result = run_cmd(["whoami"], check=False)
+        user = (result.stdout or "").strip()
+    if not user:
+        log("WARNING: Cannot determine current user; skipping CoreSimulator chown",
+            tee=True)
+        return
+
+    for raw in _CORESIMULATOR_PATHS:
+        path = os.path.expanduser(raw)
+        if not os.path.exists(path):
+            log(f"  skip (not present): {path}")
+            continue
+        log(f"  sudo chown -R {user}:staff {path}", tee=True)
+        result = run_cmd(["sudo", "chown", "-R", f"{user}:staff", path],
+                         check=False)
+        if result.returncode != 0:
+            log(f"WARNING: chown on {path} failed (exit {result.returncode}). "
+                f"simctl boot may still hit permission errors.", tee=True)
+        # Show ownership for diagnostics
+        run_cmd(["ls", "-la", path], check=False)
 
 
 def setup_dotnet(correlation_payload):
@@ -569,9 +628,21 @@ def create_and_boot_simulator(workitem_root):
     log(f"Booting simulator {udid}", tee=True)
     boot = run_cmd(["xcrun", "simctl", "boot", udid], check=False)
     if boot.returncode != 0 and "Booted" not in (boot.stdout or ""):
-        log(f"ERROR: simctl boot failed (exit {boot.returncode}).", tee=True)
-        _dump_log()
-        sys.exit(1)
+        # On shared Helix machines, even a fresh device can fail to boot
+        # because CoreSimulator writes log/state files into shared folders
+        # that may still have foreign ownership the chown didn't catch.
+        # Run another chown then retry once. If the retry still fails, give
+        # up — the diagnostics from chown should explain why.
+        log(f"WARNING: simctl boot failed (exit {boot.returncode}). "
+            f"Re-running CoreSimulator chown and retrying once.", tee=True)
+        fix_coresimulator_permissions()
+        boot = run_cmd(["xcrun", "simctl", "boot", udid], check=False)
+        if boot.returncode != 0 and "Booted" not in (boot.stdout or ""):
+            log(f"ERROR: simctl boot retry failed (exit {boot.returncode}).",
+                tee=True)
+            _dump_log()
+            sys.exit(1)
+        log("Boot retry succeeded after chown.", tee=True)
 
     # Wait for the simulator to finish booting. Without this, downstream
     # actool / mlaunch race against the boot and intermittently fail.
@@ -920,6 +991,7 @@ def main():
     # with permission errors. Even physical-device builds need a writable
     # simulator booted because actool spawns AssetCatalogSimulatorAgent via
     # CoreSimulator during 'dotnet build' for ios-arm64.
+    fix_coresimulator_permissions()
     validate_simulator_runtimes()
     create_and_boot_simulator(workitem_root)
 
