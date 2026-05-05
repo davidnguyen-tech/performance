@@ -367,122 +367,146 @@ class iOSHelper:
     def measure_cold_startup(self, bundle_id):
         """Measure app cold startup time in ms (int).
 
-        Uses mlaunch to match the real F5 developer experience:
-          - Simulator: mlaunch --launchsim (run as background process since
-            it blocks until the app exits; we detect launch via simctl and
-            then terminate the process)
+          - Simulator: ``xcrun simctl launch`` returns the launched PID
+            immediately. We measure wall-clock from invocation to PID
+            return (the same as what mlaunch internally reports), then
+            verify the process is still alive after a short stabilization
+            window so we don't report success for a crashed launch.
           - Device:    mlaunch --launchdev (returns immediately with PID)
 
-        Terminates any running instance first. For simulator this uses
-        simctl terminate (mlaunch has no simulator terminate command).
+        Note on the simulator path: an earlier version used
+        ``mlaunch --launchsim`` to better mirror the IDE F5 experience,
+        but on Apple Silicon Helix queues the simulator went from Booted
+        to Shutdown during/after that call (with no diagnostic output
+        from mlaunch). ``simctl launch`` is what mlaunch invokes
+        internally for the actual launch step, so the measurement is
+        equivalent for our purposes.
         """
 
         if self.is_physical_device:
             return self._measure_device_startup_via_watchdog(bundle_id)
 
-        # Simulator: --launchsim blocks until the app exits, so run it
-        # in a subprocess and poll for the app to appear in the process list.
-        mlaunch = self._resolve_mlaunch()
+        # ── Simulator ────────────────────────────────────────────────
+        # Sanity-check the simulator state before we start the timer so
+        # we fail fast with a clear error if the simulator has shut down
+        # (e.g. due to a previous workitem cleanup or system pressure).
+        self._assert_simulator_booted()
+
+        # Verify the app is actually installed before timing the launch
+        # — otherwise an install-registration failure would be reported
+        # as a launch failure.
+        try:
+            container = subprocess.run(
+                ['xcrun', 'simctl', 'get_app_container',
+                 self.device_id, bundle_id, 'app'],
+                capture_output=True, text=True, timeout=15,
+            )
+            if container.returncode != 0:
+                raise RuntimeError(
+                    f"App {bundle_id} is not installed in simulator "
+                    f"{self.device_id} (simctl get_app_container exit "
+                    f"{container.returncode}): {(container.stderr or '').strip()}"
+                )
+            getLogger().info("App container: %s", (container.stdout or '').strip())
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                f"simctl get_app_container timed out — simulator "
+                f"{self.device_id} not responding")
+
+        # Terminate any running instance for a true cold start
         self._run_quiet(['xcrun', 'simctl', 'terminate', self.device_id, bundle_id])
         time.sleep(0.5)
-        cmd = [mlaunch, '--launchsim', self.app_bundle_path,
-               '--device', f':v2:udid={self.device_id}']
+
+        # `simctl launch` returns immediately with the launched PID.
+        # `--terminate-running-process` makes the launch reliably cold
+        # even if termination above didn't take effect.
+        cmd = ['xcrun', 'simctl', 'launch', '--terminate-running-process',
+               self.device_id, bundle_id]
         getLogger().info("$ %s", ' '.join(cmd))
-
-        # The app's executable name inside the .app — this is what shows up
-        # in the simulator's process list (NOT the bundle id).  Modern iOS
-        # simulators don't reliably register UI apps in `launchctl list`
-        # (which only lists daemons/agents), so we poll `ps` for the binary.
-        app_name = os.path.splitext(os.path.basename(self.app_bundle_path))[0]
         start = time.time()
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        try:
-            timeout = 180
-            poll_interval = 0.5
-            elapsed = 0.0
-            launched = False
-            while elapsed < timeout:
-                # Check if mlaunch exited with an error
-                ret = proc.poll()
-                if ret is not None and ret != 0:
-                    stdout = proc.stdout.read().decode() if proc.stdout else ''
-                    stderr = proc.stderr.read().decode() if proc.stderr else ''
-                    getLogger().error("mlaunch --launchsim failed (exit %d).\n"
-                                      "stdout:\n%s\nstderr:\n%s",
-                                      ret, stdout[-2000:], stderr[-2000:])
-                    raise subprocess.CalledProcessError(ret, cmd, stdout, stderr)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        elapsed_ms = int((time.time() - start) * 1000)
 
-                # Check if the app's binary is running inside the simulator
-                # via `ps -A`. The simulator's userland sees its own process
-                # table; UI apps appear there as soon as the dyld trampoline
-                # has loaded the executable.
-                check = subprocess.run(
-                    ['xcrun', 'simctl', 'spawn', self.device_id, 'ps', '-A'],
-                    capture_output=True, text=True, timeout=15
-                )
-                if app_name in (check.stdout or ''):
-                    launched = True
-                    break
-                time.sleep(poll_interval)
-                elapsed = time.time() - start
+        if result.returncode != 0:
+            # Dump diagnostics so we can tell whether the simulator died
+            # or the app failed to launch.
+            self._dump_simulator_diagnostics(bundle_id)
+            raise subprocess.CalledProcessError(
+                result.returncode, cmd, result.stdout, result.stderr)
 
-            if not launched:
-                # Diagnostics: dump mlaunch output so far + simctl listapps
-                # state so we can see why the app didn't appear in `ps`.
-                mlaunch_stdout = ''
-                mlaunch_stderr = ''
-                if proc.stdout:
-                    try:
-                        proc.stdout.flush()
-                    except Exception:
-                        pass
-                # Read whatever buffered output is available without blocking.
-                proc.terminate()
-                try:
-                    out, err = proc.communicate(timeout=5)
-                    mlaunch_stdout = (out or b'').decode(errors='replace')
-                    mlaunch_stderr = (err or b'').decode(errors='replace')
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    out, err = proc.communicate()
-                    mlaunch_stdout = (out or b'').decode(errors='replace')
-                    mlaunch_stderr = (err or b'').decode(errors='replace')
-                listapps = subprocess.run(
-                    ['xcrun', 'simctl', 'listapps', self.device_id],
-                    capture_output=True, text=True, timeout=15
-                )
-                ps_dump = subprocess.run(
-                    ['xcrun', 'simctl', 'spawn', self.device_id, 'ps', '-A'],
-                    capture_output=True, text=True, timeout=15
-                )
-                getLogger().error(
-                    "Simulator app launch timed out after %ds. Diagnostics:\n"
-                    "--- mlaunch stdout (last 2KB) ---\n%s\n"
-                    "--- mlaunch stderr (last 2KB) ---\n%s\n"
-                    "--- simctl listapps (looking for %s) ---\n%s\n"
-                    "--- simctl spawn ps -A (looking for %s) ---\n%s",
-                    timeout,
-                    mlaunch_stdout[-2000:], mlaunch_stderr[-2000:],
-                    bundle_id, (listapps.stdout or '')[-3000:],
-                    app_name, (ps_dump.stdout or '')[-3000:],
-                )
+        # `simctl launch` prints "<bundle_id>: <pid>" on success.
+        pid = None
+        for token in (result.stdout or '').split():
+            if token.isdigit():
+                pid = int(token)
+                break
+        if pid is None:
+            getLogger().warning(
+                "Could not parse PID from simctl launch output: %r",
+                (result.stdout or '').strip())
+        else:
+            getLogger().info("Launched %s with PID %d", bundle_id, pid)
+            # Stabilization check: the app should still be alive 2s
+            # later. If not, the launch was a crash, not a real start.
+            time.sleep(2.0)
+            check = subprocess.run(
+                ['xcrun', 'simctl', 'spawn', self.device_id,
+                 'ps', '-p', str(pid)],
+                capture_output=True, text=True, timeout=15,
+            )
+            if check.returncode != 0 or str(pid) not in (check.stdout or ''):
+                self._dump_simulator_diagnostics(bundle_id)
                 raise RuntimeError(
-                    f"Simulator app launch timed out after {timeout}s — "
-                    f"app process '{app_name}' never appeared in simulator ps. "
-                    f"See diagnostics above."
-                )
+                    f"App {bundle_id} (PID {pid}) crashed within 2s of "
+                    f"launch; simctl spawn ps -p exit "
+                    f"{check.returncode}, output: "
+                    f"{(check.stdout or '').strip()!r}")
 
-            elapsed_ms = int((time.time() - start) * 1000)
-            getLogger().info("Cold startup: %d ms", elapsed_ms)
-            return elapsed_ms
-        finally:
-            if proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
+        getLogger().info("Cold startup: %d ms", elapsed_ms)
+        return elapsed_ms
+
+    def _assert_simulator_booted(self):
+        """Raise RuntimeError if ``self.device_id`` is not in the Booted state."""
+        try:
+            result = subprocess.run(
+                ['xcrun', 'simctl', 'list', 'devices', '-j'],
+                capture_output=True, text=True, timeout=15,
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("simctl list devices timed out")
+        try:
+            data = json.loads(result.stdout or '{}')
+        except Exception:
+            data = {}
+        for runtime_devices in (data.get('devices') or {}).values():
+            for dev in runtime_devices:
+                if dev.get('udid') == self.device_id:
+                    state = dev.get('state', '?')
+                    if state != 'Booted':
+                        raise RuntimeError(
+                            f"Simulator {self.device_id} is in state "
+                            f"{state!r}, expected 'Booted'. "
+                            f"It must have been shut down between "
+                            f"create_and_boot_simulator and the measurement.")
+                    return
+        raise RuntimeError(
+            f"Simulator {self.device_id} not found in `simctl list devices`.")
+
+    def _dump_simulator_diagnostics(self, bundle_id):
+        """Best-effort diagnostics dump for a failed simulator launch."""
+        for cmd in (
+            ['xcrun', 'simctl', 'list', 'devices', self.device_id],
+            ['xcrun', 'simctl', 'listapps', self.device_id],
+            ['xcrun', 'simctl', 'spawn', self.device_id, 'ps', '-A'],
+        ):
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+                getLogger().error(
+                    "$ %s\n--- exit %d ---\n%s\n--- stderr ---\n%s",
+                    ' '.join(cmd), r.returncode,
+                    (r.stdout or '')[-3000:], (r.stderr or '')[-1500:])
+            except Exception as e:
+                getLogger().error("Diagnostic %s failed: %s", ' '.join(cmd), e)
 
     def _measure_device_startup_via_watchdog(self, bundle_id):
         """Measure physical device cold startup using SpringBoard watchdog events.
