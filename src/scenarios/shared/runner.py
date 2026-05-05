@@ -1094,6 +1094,38 @@ ex: C:\repos\performance;C:\repos\runtime
                     raise Exception("Physical device mode requires a device UDID. "
                                     "Set --device-id or IOS_DEVICE_UDID, or connect a device.")
                 self.deviceid = detected
+
+            # --- Cross-arch RID correction for simulator builds ---
+            # The .proj defaults RuntimeIdentifier to iossimulator-x64 because
+            # the original Helix queue (Mac.iPhone.17.Perf) was Intel x64.
+            # Other queues (e.g. Mac.iPhone.13.Perf) are Apple Silicon, where
+            # an x64 .app cannot install on an arm64 simulator (mlaunch fails
+            # with HE0046 "Failed to find matching arch"). Detect the host
+            # arch here and rewrite the RID in --msbuild-args so the build
+            # produces a binary matching the simulator we'll deploy to.
+            # Physical-device builds (ios-arm64) target the iPhone hardware,
+            # not the host, so we never override their RID.
+            if not is_physical and self.msbuildargs:
+                import platform as _platform
+                host_arch = _platform.machine()
+                if host_arch == 'arm64' and 'iossimulator-x64' in self.msbuildargs:
+                    self.msbuildargs = self.msbuildargs.replace(
+                        'iossimulator-x64', 'iossimulator-arm64')
+                    getLogger().info(
+                        "Cross-arch RID correction: host=arm64, rewrote msbuild "
+                        "args to use iossimulator-arm64 (was iossimulator-x64)")
+                elif host_arch == 'x86_64' and 'iossimulator-arm64' in self.msbuildargs:
+                    self.msbuildargs = self.msbuildargs.replace(
+                        'iossimulator-arm64', 'iossimulator-x64')
+                    getLogger().info(
+                        "Cross-arch RID correction: host=x86_64, rewrote msbuild "
+                        "args to use iossimulator-x64 (was iossimulator-arm64)")
+                # Keep IOS_RID env var aligned so versionmanager uses the same
+                # RID for the linked-DLL lookup below.
+                m = re.search(r'/p:RuntimeIdentifier=(\S+)', self.msbuildargs)
+                if m:
+                    os.environ['IOS_RID'] = m.group(1)
+
             getLogger().info("iOS inner loop: device_type=%s, device_id=%s", self.devicetype, self.deviceid)
             scenarioprefix = self.scenarioname or "MAUI iOS Build and Deploy"
 

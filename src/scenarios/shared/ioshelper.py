@@ -339,22 +339,26 @@ class iOSHelper:
     def install_app(self, app_bundle_path):
         """Install the app bundle and return wall-clock install time in ms.
 
-        Device:    devicectl (direct, avoids mlaunch tunnel issues on local)
-        Simulator: mlaunch --installsim
+        Per .NET iOS team guidance (Rolf), mlaunch is the canonical way to
+        deploy on both simulator and physical devices — it matches what the
+        IDEs do during F5, handles ad-hoc signing for personal-team device
+        deploys, and avoids `xcrun devicectl`'s strict CoreSign requirement
+        which fails for unsigned/ad-hoc Debug builds (MIInstallerErrorDomain
+        error 13 / "No code signature found").
+
+        Device:    mlaunch --installdev <app> --devname <UDID>
+        Simulator: mlaunch --installsim <app> --device :v2:udid=<UDID>
         """
         start = time.time()
+        mlaunch = self._resolve_mlaunch()
 
         if self.is_physical_device:
-            # Use devicectl directly — mlaunch's internal devicectl invocation
-            # often fails to establish the CoreDevice tunnel on local machines.
-            cmd = ['xcrun', 'devicectl', 'device', 'install', 'app',
-                   '--device', self.device_id, app_bundle_path]
-            RunCommand(cmd, verbose=True).run()
+            cmd = [mlaunch, '--installdev', app_bundle_path,
+                   '--devname', self.device_id]
         else:
-            mlaunch = self._resolve_mlaunch()
             cmd = [mlaunch, '--installsim', app_bundle_path,
                    '--device', f':v2:udid={self.device_id}']
-            RunCommand(cmd, verbose=True).run()
+        RunCommand(cmd, verbose=True).run()
 
         elapsed_ms = (time.time() - start) * 1000
         getLogger().info("Install completed in %.1f ms", elapsed_ms)
@@ -449,13 +453,29 @@ class iOSHelper:
         # Record timestamp before launch for log collection window
         start_ts = time.strftime('%Y-%m-%d %H:%M:%S%z')
 
-        # Launch the app
-        cmd = ['xcrun', 'devicectl', 'device', 'process', 'launch',
-               '--device', self.device_id, '--terminate-existing', bundle_id]
-        RunCommand(cmd, verbose=True).run()
-
-        # Wait for the app to fully start before collecting logs
-        time.sleep(5)
+        # Launch the app via mlaunch --launchdev (Rolf's guidance — same
+        # tool the IDEs use during F5; consistent with --installdev above).
+        # mlaunch --launchdev BLOCKS until the app exits (it tunnels stdout/
+        # stderr from the device), so run it in a subprocess and terminate
+        # after we've collected enough log data. Killing mlaunch closes the
+        # tunnel but the app stays running on the device long enough for
+        # SpringBoard to emit the watchdog events we need.
+        mlaunch = self._resolve_mlaunch()
+        launch_cmd = [mlaunch, '--launchdev', self.app_bundle_path,
+                      '--devname', self.device_id]
+        getLogger().info("$ %s", ' '.join(launch_cmd))
+        launch_proc = subprocess.Popen(
+            launch_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            # Wait for the app to fully start before collecting logs.
+            time.sleep(5)
+        finally:
+            launch_proc.terminate()
+            try:
+                launch_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                launch_proc.kill()
+                launch_proc.wait()
 
         # Collect device logs covering the launch window.
         # Both rm -rf calls use sudo because `sudo log collect` writes the
