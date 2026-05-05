@@ -917,6 +917,101 @@ def detect_physical_device():
 
 # --- Main ---
 
+# --- Device signing artifact discovery ---
+
+# On Mac.iPhone.*.Perf machines, Helix machine prep installs the developer
+# provisioning profile (embedded.mobileprovision) and the 'sign' tool at
+# known paths. XHarness work items get them in CWD automatically; HelixWorkItem
+# (us) has to find and stage them ourselves.
+_SIGNING_SEARCH_ROOTS = [
+    "/etc/helix-prep",
+    "/Users/helix-runner",
+    "/Users/Shared/Helix",
+    "/var/helix",
+    "/usr/local/bin",
+    "/usr/local/share",
+]
+
+
+def find_and_stage_signing_artifacts(workitem_root):
+    """Locate embedded.mobileprovision and the 'sign' tool on the Helix machine.
+
+    Searches several well-known root directories. If found, stages
+    embedded.mobileprovision into ``workitem_root`` (so ioshelper.py picks
+    it up via its CWD-based lookup) and symlinks ``sign`` into the work
+    item's venv ``bin/`` directory (already on PATH per the .proj
+    PreCommands), so ioshelper.py finds it via ``shutil.which('sign')``.
+
+    Logs warnings (does not raise) when artifacts are missing — the device
+    install path will surface a clear failure later.
+    """
+    log_raw("=== DEVICE SIGNING ARTIFACT DISCOVERY ===", tee=True)
+
+    provision_path = None
+    sign_path = None
+    for root in _SIGNING_SEARCH_ROOTS:
+        if not os.path.isdir(root):
+            continue
+        try:
+            result = subprocess.run(
+                [
+                    "find", root, "-maxdepth", "6",
+                    "(", "-name", "embedded.mobileprovision",
+                    "-o", "-name", "sign", ")",
+                    "-not", "-path", "*/.Trash/*",
+                ],
+                capture_output=True, text=True, timeout=30,
+            )
+            for line in (result.stdout or "").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                base = os.path.basename(line)
+                if base == "embedded.mobileprovision" and provision_path is None:
+                    provision_path = line
+                elif base == "sign" and sign_path is None:
+                    if os.path.isfile(line) and os.access(line, os.X_OK):
+                        sign_path = line
+                if provision_path and sign_path:
+                    break
+        except Exception as e:
+            log(f"Search in {root} failed: {e}")
+        if provision_path and sign_path:
+            break
+
+    if provision_path:
+        log(f"Found embedded.mobileprovision at: {provision_path}", tee=True)
+        try:
+            import shutil
+            dest = os.path.join(workitem_root, "embedded.mobileprovision")
+            shutil.copy2(provision_path, dest)
+            log(f"Copied embedded.mobileprovision to: {dest}", tee=True)
+        except Exception as e:
+            log(f"WARNING: failed to copy embedded.mobileprovision: {e}", tee=True)
+    else:
+        log("WARNING: embedded.mobileprovision not found in any known location. "
+            "Device install will likely fail with 'No code signature found'.",
+            tee=True)
+
+    if sign_path:
+        log(f"Found 'sign' tool at: {sign_path}", tee=True)
+        # Symlink into the workitem venv bin (already on PATH per .proj PreCommands)
+        venv_bin = os.path.join(workitem_root, ".venv", "bin")
+        try:
+            os.makedirs(venv_bin, exist_ok=True)
+            link_target = os.path.join(venv_bin, "sign")
+            if os.path.lexists(link_target):
+                os.remove(link_target)
+            os.symlink(sign_path, link_target)
+            log(f"Symlinked sign tool to: {link_target}", tee=True)
+        except Exception as e:
+            log(f"WARNING: failed to symlink sign tool: {e}", tee=True)
+    else:
+        log("WARNING: 'sign' tool not found in any known location. "
+            "Device install will likely fail. Searched: "
+            f"{', '.join(_SIGNING_SEARCH_ROOTS)}", tee=True)
+
+
 def main():
     global _logfile
 
@@ -996,6 +1091,12 @@ def main():
     create_and_boot_simulator(workitem_root)
 
     if is_physical_device:
+        # Search for embedded.mobileprovision and 'sign' tool on the
+        # Helix machine and stage them so ioshelper.py's signing flow
+        # can find them. Logs warnings if not found — installation
+        # will surface a clearer failure later.
+        find_and_stage_signing_artifacts(workitem_root)
+
         # Detect and validate the connected physical device
         device_udid = detect_physical_device()
         if not device_udid:
