@@ -132,6 +132,43 @@ _CORESIMULATOR_PATHS = [
     "~/Library/Saved Application State/com.apple.CoreSimulator.CoreSimulatorService.savedState",
 ]
 
+# Subdirectory names underneath /Library/Developer/CoreSimulator that are
+# Apple-managed read-only content (mounted runtime images, device-type
+# bundles, signed system cryptexes). We have no permission to chown them and
+# never need to — `simctl boot` only writes to Devices/ and Logs/. Without
+# pruning these names, a recursive chown on /Library/Developer/CoreSimulator
+# walks the iOS runtime volume (e.g. .../Volumes/iOS_23E254a/) and emits one
+# "Operation not permitted" line per file — ~700k lines / 200+ MB of console
+# log spam per Helix work item.
+_CORESIMULATOR_PRUNE_NAMES = ("Volumes", "Profiles", "Cryptex", "Images")
+
+
+def _sudo_chown_pruning(path, owner):
+    """``sudo chown -R owner path`` but prune Apple read-only subtrees.
+
+    Equivalent to::
+
+        sudo find <path> \\( -name Volumes -o -name Profiles -o
+                             -name Cryptex -o -name Images \\) -prune \\
+                          -o -exec chown owner {} +
+
+    Used in place of plain ``chown -R`` for the system-wide CoreSimulator
+    paths (see ``_CORESIMULATOR_PRUNE_NAMES`` for why). The plain ``chown -R``
+    walks the iOS runtime image and emits hundreds of thousands of
+    "Operation not permitted" lines we then dutifully copy into the Helix
+    log; this variant skips those read-only mount points at the source.
+    """
+    name_clause: list[str] = []
+    for name in _CORESIMULATOR_PRUNE_NAMES:
+        if name_clause:
+            name_clause.append("-o")
+        name_clause.extend(["-name", name])
+    cmd = (
+        ["sudo", "find", path, "("] + name_clause + [")", "-prune",
+         "-o", "-exec", "chown", owner, "{}", "+"]
+    )
+    return run_cmd(cmd, check=False)
+
 
 def fix_coresimulator_permissions():
     """Take ownership of CoreSimulator folders so simctl boot can succeed.
@@ -140,11 +177,19 @@ def fix_coresimulator_permissions():
     state owned by prior tenants. ``simctl boot`` writes log/state files
     into several Library folders, and even a freshly-created device fails
     to boot if any one of them is not writable by the current user. This
-    function ``sudo chown -R``s the relevant folders to the current user
-    so that boot, spawn, and shutdown all work. It is best-effort: paths
-    that don't exist are skipped, and chown failures are logged as warnings
-    so the rest of setup still runs (the boot itself will fail loudly with
-    diagnostics if permissions are still wrong).
+    function chowns the relevant folders to the current user so that boot,
+    spawn, and shutdown all work.
+
+    For the system-wide ``/Library/Developer/CoreSimulator`` tree we use
+    ``find ... -prune`` rather than a plain ``chown -R`` to avoid recursing
+    into Apple's read-only runtime/profile/cryptex mount points (see
+    ``_CORESIMULATOR_PRUNE_NAMES``). For per-user paths under ``~/Library``
+    we use plain ``chown -R`` because they don't contain those mounts.
+
+    It is best-effort: paths that don't exist are skipped, and chown
+    failures are logged as warnings so the rest of setup still runs (the
+    boot itself will fail loudly with diagnostics if permissions are still
+    wrong).
     """
     log_raw("=== COREsimulator PERMISSIONS ===", tee=True)
     user = os.environ.get("USER") or ""
@@ -156,19 +201,26 @@ def fix_coresimulator_permissions():
         log("WARNING: Cannot determine current user; skipping CoreSimulator chown",
             tee=True)
         return
+    owner = f"{user}:staff"
 
     for raw in _CORESIMULATOR_PATHS:
         path = os.path.expanduser(raw)
         if not os.path.exists(path):
             log(f"  skip (not present): {path}")
             continue
-        log(f"  sudo chown -R {user}:staff {path}", tee=True)
-        result = run_cmd(["sudo", "chown", "-R", f"{user}:staff", path],
-                         check=False)
+        # Only the system-wide /Library/Developer/CoreSimulator tree contains
+        # the Apple-mounted read-only volumes that explode chown -R output.
+        if path == "/Library/Developer/CoreSimulator":
+            log(f"  sudo find {path} (prune {_CORESIMULATOR_PRUNE_NAMES}) "
+                f"-exec chown {owner}", tee=True)
+            result = _sudo_chown_pruning(path, owner)
+        else:
+            log(f"  sudo chown -R {owner} {path}", tee=True)
+            result = run_cmd(["sudo", "chown", "-R", owner, path], check=False)
         if result.returncode != 0:
             log(f"WARNING: chown on {path} failed (exit {result.returncode}). "
                 f"simctl boot may still hit permission errors.", tee=True)
-        # Show ownership for diagnostics
+        # Show ownership for diagnostics (top-level only — ls -la is non-recursive)
         run_cmd(["ls", "-la", path], check=False)
 
 
