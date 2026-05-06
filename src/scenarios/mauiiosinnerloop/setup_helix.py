@@ -7,7 +7,7 @@ for iOS builds:
   2. Select the Xcode version that matches the iOS SDK workload packs.
   3. Validate iOS simulator runtime availability.
   4. Boot the target iOS simulator device.
-  5. (Device only) Locate signing artifacts; skip the work item if missing.
+  5. (Device only) Locate signing artifacts; FAIL the work item if missing.
   6. Install the maui-ios workload.
   7. Restore NuGet packages for the app project.
   8. Disable Spotlight indexing on the workitem directory.
@@ -33,11 +33,13 @@ Both must be present somewhere on the Helix machine (see
 ``_SIGNING_SEARCH_ROOTS``). The Mac.iPhone.17.Perf queue had Helix machine
 prep install them; newer queues like Mac.iPhone.13.Perf currently do NOT,
 which is a tracked machine-image gap. When the artifacts are missing,
-``find_and_stage_signing_artifacts`` returns False and we write a
-``SKIPPED.flag`` sentinel so test.py can exit 0 with a loud ``WORK ITEM
-SKIPPED`` log line — the work item passes (not silently!) and the reason
-is preserved verbatim in the console log. Once the queue is provisioned
-the device path runs automatically; no code change required.
+``find_and_stage_signing_artifacts`` returns False and the work item
+FAILS LOUDLY with sys.exit(1) and a ``WORK ITEM FAILED — DEVICE INFRA
+UNAVAILABLE`` banner in the console log. We deliberately do NOT mask
+the failure as a "skip" / pass: a green build must mean the scenario
+actually ran, not that we silently sidestepped a queue gap. The fix is
+to provision the queue (Engineering Services ticket), not to flip a
+flag in this script.
 """
 
 import json
@@ -1088,25 +1090,6 @@ def find_and_stage_signing_artifacts(workitem_root):
     return bool(provision_path and sign_path)
 
 
-# Sentinel filename written to HELIX_WORKITEM_ROOT when a workitem must
-# be skipped due to missing infrastructure. test.py checks for this and
-# exits 0 so the work item is reported as PASS rather than failing the
-# build for a known infrastructure gap.
-SKIP_SENTINEL = "SKIPPED.flag"
-
-
-def write_skip_sentinel(workitem_root, reason):
-    """Write a sentinel file so test.py knows to skip this work item."""
-    path = os.path.join(workitem_root, SKIP_SENTINEL)
-    try:
-        with open(path, "w") as fh:
-            fh.write(reason)
-        log_raw(f"=== WROTE SKIP SENTINEL: {path} ===", tee=True)
-        log(f"Reason: {reason}", tee=True)
-    except Exception as e:
-        log(f"WARNING: failed to write skip sentinel: {e}", tee=True)
-
-
 def main():
     global _logfile
 
@@ -1195,26 +1178,29 @@ def main():
         # provisioning profile + 'sign' tool), iOS device install
         # cannot succeed — devicectl will fail with
         # "No code signature found" regardless of which install tool
-        # we use. The Mac.iPhone.13.Perf queue does NOT currently have
-        # this infra installed (machine setup gap, tracked separately).
-        # Rather than failing the build for a known infra gap, write a
-        # skip sentinel; test.py will exit 0 with a clear SKIPPED log
-        # so the work item passes and humans can see the reason.
+        # we use. Fail loudly so missing queue provisioning shows up
+        # as a red build, not a green-with-hidden-skip. Provisioning
+        # the queue (Apple Developer cert + provisioning profile +
+        # 'sign' tool, same as Mac.iPhone.17.Perf) is an Engineering
+        # Services ticket, not a code change here.
         if not signing_ready:
-            write_skip_sentinel(
-                workitem_root,
+            reason = (
                 "Device code-signing infrastructure not available on this "
                 "Helix machine (embedded.mobileprovision and/or 'sign' tool "
-                "missing). Cannot install unsigned app on physical device. "
-                "Skipping device measurement; this is an infra gap, not a "
-                "scenario bug. Re-enable by provisioning the queue with the "
-                "Apple Developer cert + provisioning profile + 'sign' tool "
-                "(same as Mac.iPhone.17.Perf)."
+                "missing). Cannot install signed app on physical device. "
+                "This is a queue provisioning gap, not a scenario bug. "
+                "Fix: provision the queue with the Apple Developer cert + "
+                "provisioning profile + 'sign' tool (same as "
+                "Mac.iPhone.17.Perf). Search roots checked: "
+                + ", ".join(_SIGNING_SEARCH_ROOTS)
             )
-            log_raw("=== iOS HELIX SETUP SKIPPED (DEVICE INFRA UNAVAILABLE) ===",
-                    tee=True)
+            log_raw("=" * 70, tee=True)
+            log_raw("WORK ITEM FAILED — DEVICE INFRA UNAVAILABLE", tee=True)
+            log_raw("=" * 70, tee=True)
+            log(reason, tee=True)
+            log_raw("=" * 70, tee=True)
             _dump_log()
-            return 0
+            sys.exit(1)
 
         # Detect and validate the connected physical device
         device_udid = detect_physical_device()
