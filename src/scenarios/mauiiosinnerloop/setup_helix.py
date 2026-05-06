@@ -1267,18 +1267,38 @@ def main():
             _dump_log()
             sys.exit(1)
 
-        # Detect and validate the connected physical device
+        # Detect and validate the connected physical device. We require one;
+        # there is NO fallback to the simulator on a device job. A green
+        # device job MUST mean device measurements ran on real hardware,
+        # never that we silently downgraded to a simulator. Fail fast and
+        # loud here so a missing/disconnected device shows up as a queue
+        # provisioning bug, not as 5 minutes of wasted dotnet build before
+        # runner.py finally raises during install.
         device_udid = detect_physical_device()
         if not device_udid:
-            log("WARNING: No physical device found. Build may still succeed "
-                "but deploy will fail.", tee=True)
-        else:
-            # Log the detected UDID for diagnostics. Note: os.environ changes
-            # in this Python process do NOT persist to subsequent Helix commands
-            # (test.py, post.py). runner.py re-detects the device independently
-            # via iOSHelper.detect_connected_device().
-            os.environ["IOS_DEVICE_UDID"] = device_udid
-            log(f"IOS_DEVICE_UDID detected: {device_udid}", tee=True)
+            reason = (
+                "No physical iOS device detected on this Helix machine. "
+                "Device job requires a connected, paired iPhone — there is "
+                "NO simulator fallback by design. This is a queue "
+                "provisioning gap (device disconnected, not paired, or "
+                "queue capacity issue), not a scenario bug. Verify the "
+                "Mac.iPhone.13.Perf machine has its iPhone connected and "
+                "paired (xcrun devicectl list devices)."
+            )
+            log_raw("=" * 70, tee=True)
+            log_raw("WORK ITEM FAILED — NO PHYSICAL DEVICE", tee=True)
+            log_raw("=" * 70, tee=True)
+            log(reason, tee=True)
+            log_raw("=" * 70, tee=True)
+            _dump_log()
+            sys.exit(1)
+
+        # Log the detected UDID for diagnostics. Note: os.environ changes
+        # in this Python process do NOT persist to subsequent Helix commands
+        # (test.py, post.py). runner.py re-detects the device independently
+        # via iOSHelper.detect_connected_device().
+        os.environ["IOS_DEVICE_UDID"] = device_udid
+        log(f"IOS_DEVICE_UDID detected: {device_udid}", tee=True)
 
     # Step 5: Install the maui-ios workload
     # Must happen BEFORE restore because restore needs workload packs
