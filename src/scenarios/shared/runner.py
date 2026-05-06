@@ -1329,28 +1329,10 @@ ex: C:\repos\performance;C:\repos\runtime
                         rmtree(traces_upload)
                     copytree(const.TRACEDIR, traces_upload, dirs_exist_ok=True)
                     if self.traits.upload_to_perflab_container:
-                        # Upload is best-effort for the iOS inner loop scenario:
-                        # the measurements (the scenario's purpose) have already
-                        # succeeded and been written to disk by this point.
-                        # Upload requires perf-lab credentials (managed identity
-                        # or LabCert1.pfx) that may not be provisioned on every
-                        # queue (e.g. Mac.iPhone.13.Perf currently lacks both),
-                        # so we log and continue rather than failing the work
-                        # item for an infra gap unrelated to the measurement.
                         for report_path in [first_e2e_report, incremental_e2e_report]:
-                            try:
-                                upload_code = upload.upload(report_path, UPLOAD_CONTAINER, UPLOAD_QUEUE, UPLOAD_STORAGE_URI)
-                            except Exception as ex:
-                                getLogger().warning(
-                                    "Skipping upload of %s due to credential/infra error: %s",
-                                    report_path, ex)
-                                continue
+                            upload_code = upload.upload(report_path, UPLOAD_CONTAINER, UPLOAD_QUEUE, UPLOAD_STORAGE_URI)
                             if upload_code != 0:
-                                getLogger().warning(
-                                    "Upload of %s returned non-zero (%s); "
-                                    "continuing — measurement results are still "
-                                    "available on the work item disk.",
-                                    report_path, upload_code)
+                                sys.exit(upload_code)
 
             finally:
                 iosHelper.cleanup(skip_uninstall=True)

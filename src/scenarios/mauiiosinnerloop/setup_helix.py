@@ -7,9 +7,10 @@ for iOS builds:
   2. Select the Xcode version that matches the iOS SDK workload packs.
   3. Validate iOS simulator runtime availability.
   4. Boot the target iOS simulator device.
-  5. Install the maui-ios workload.
-  6. Restore NuGet packages for the app project.
-  7. Disable Spotlight indexing on the workitem directory.
+  5. (Device only) Locate signing artifacts; skip the work item if missing.
+  6. Install the maui-ios workload.
+  7. Restore NuGet packages for the app project.
+  8. Disable Spotlight indexing on the workitem directory.
 
 Xcode selection strategy: The iOS SDK packs require a SPECIFIC Xcode version
 (e.g. packs 26.2.x need Xcode 26.2). This script derives the required Xcode
@@ -18,6 +19,25 @@ the workitem payload), then selects a matching ``/Applications/Xcode_*.app``.
 If rollback_maui.json is absent or unparseable, it falls back to a coarse
 ``>= _MIN_XCODE_MAJOR`` check. This fails the work item early instead of
 wasting 20+ minutes on workload install before hitting _ValidateXcodeVersion.
+
+Device path & infrastructure prerequisites
+------------------------------------------
+For the physical-device variant (IOS_RID=ios-arm64) the build runs with
+``EnableCodeSigning=false`` to keep MSBuild deterministic on Helix; the
+post-build ``ioshelper.sign_app_for_device`` re-signs the .app using:
+
+  - ``embedded.mobileprovision`` — staged into HELIX_WORKITEM_ROOT (CWD)
+  - ``sign`` tool — symlinked into the venv ``bin/`` so it's on PATH
+
+Both must be present somewhere on the Helix machine (see
+``_SIGNING_SEARCH_ROOTS``). The Mac.iPhone.17.Perf queue had Helix machine
+prep install them; newer queues like Mac.iPhone.13.Perf currently do NOT,
+which is a tracked machine-image gap. When the artifacts are missing,
+``find_and_stage_signing_artifacts`` returns False and we write a
+``SKIPPED.flag`` sentinel so test.py can exit 0 with a loud ``WORK ITEM
+SKIPPED`` log line — the work item passes (not silently!) and the reason
+is preserved verbatim in the console log. Once the queue is provisioned
+the device path runs automatically; no code change required.
 """
 
 import json

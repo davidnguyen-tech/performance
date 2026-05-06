@@ -1,3 +1,48 @@
+"""iOS deploy and startup measurement helpers (simulator + physical device).
+
+This module is the single source of truth for "F5-style" install + launch
+measurement on iOS. Two device kinds, two slightly different toolchains:
+
+  ┌──────────┬──────────────────────────┬──────────────────────────────┐
+  │          │ install                  │ cold-startup measurement     │
+  ├──────────┼──────────────────────────┼──────────────────────────────┤
+  │ device   │ mlaunch --installdev     │ mlaunch --launchdev          │
+  │          │ (handles devicectl tunnel│ (returns PID immediately,    │
+  │          │  + devicectl signing     │  watchdog log captures the   │
+  │          │  metadata)               │  startup phases)             │
+  ├──────────┼──────────────────────────┼──────────────────────────────┤
+  │ simulator│ mlaunch --installsim     │ xcrun simctl launch          │
+  │          │ (matches what the IDE    │ (NOT mlaunch --launchsim,    │
+  │          │  does during F5)         │  see Note 1 below)           │
+  └──────────┴──────────────────────────┴──────────────────────────────┘
+
+Per .NET iOS team guidance (Rolf Bjarne Kvinge), mlaunch is the canonical
+tool the IDEs use during F5 — it handles ad-hoc signing, devicectl tunnel
+setup, and stdout tunnelling. We use it wherever the IDE would.
+
+Note 1 — why simctl for simulator launch instead of mlaunch --launchsim:
+   mlaunch --launchsim blocks until the launched app exits (it tunnels app
+   stdout/stderr) and during testing on Apple Silicon Helix machines the
+   simulator transitioned from Booted → Shutdown silently during the call,
+   producing 180-second timeouts with no diagnostic output. simctl launch
+   is what mlaunch invokes internally for the actual launch step, so the
+   wall-clock measurement is equivalent — we just skip mlaunch's stdout
+   tunnel layer (we don't need it for measurement). See
+   ``measure_cold_startup`` for the implementation and the post-launch
+   stabilization check that confirms the launched PID survives.
+
+Note 2 — physical-device install requires code signing:
+   ``mlaunch --installdev`` ultimately calls ``xcrun devicectl device
+   install app``, which refuses to install an unsigned bundle (errors with
+   MIInstallerErrorDomain code 13, "No code signature found"). The .proj
+   builds with ``EnableCodeSigning=false`` to keep the build deterministic
+   on Helix, then ``sign_app_for_device`` re-signs the bundle using the
+   ``embedded.mobileprovision`` and ``sign`` tool that Helix machine prep
+   is expected to provide. If those artifacts are missing the install
+   will fail; the orchestrator (setup_helix.py) is responsible for
+   detecting that case.
+"""
+
 import glob
 import json
 import os
@@ -15,13 +60,8 @@ class iOSHelper:
     """Unified helper for iOS simulator and physical device operations.
 
     Callers use the same API (setup_device, install_app, measure_cold_startup,
-    cleanup) regardless of device type.
-
-    Install and launch use mlaunch (the same tool Visual Studio uses for F5)
-    to match the real developer inner-loop experience:
-      - Simulator: mlaunch --installsim / --launchsim
-      - Device:    mlaunch --installdev / --launchdev
-    Device detection still uses devicectl; simulator management uses simctl.
+    cleanup) regardless of device type. See module docstring for the
+    install/launch tooling matrix and the rationale behind it.
     """
 
     _mlaunch_path = None  # resolved once, cached for the process
