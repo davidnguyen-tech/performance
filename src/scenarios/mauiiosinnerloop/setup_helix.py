@@ -639,6 +639,63 @@ def _simulator_preflight(udid):
     log("Preflight OK — simulator can spawn processes.", tee=True)
 
 
+def _sweep_leaked_perftest_simulators():
+    """Shutdown and delete any leaked ``PerfTest-iPhone-*`` simulators from
+    previous workitems on this Helix machine.
+
+    Each booted simulator forks ~150–200 child processes (launchd_sim plus
+    a long tail of system daemons). A handful of leaked simulators is enough
+    to push the per-user process count past the macOS ``maxUserProcs``
+    rlimit (typically 1333), at which point ``simctl boot`` for THIS work
+    item fails with NSPOSIXErrorDomain code 67 / "Unable to boot device
+    due to insufficient system resources". Leaks happen when a previous
+    workitem's post.py crashed before reaching delete_simulator(), or when
+    the workitem was killed mid-run by a Helix timeout.
+
+    We're conservative: we only touch devices whose name starts with the
+    well-known ``PerfTest-iPhone-`` prefix used by ``_unique_simulator_name``,
+    so we never disturb shared queue infrastructure or non-perf workitems.
+    Best-effort — failures are logged but don't abort setup.
+    """
+    log_raw("=== LEAKED PERFTEST SIMULATOR SWEEP ===", tee=True)
+    try:
+        listing = run_cmd(["xcrun", "simctl", "list", "devices", "-j"],
+                          check=False)
+    except Exception as e:
+        log(f"WARNING: could not list simulators for sweep: {e}", tee=True)
+        return
+    if listing.returncode != 0 or not listing.stdout:
+        log(f"WARNING: simctl list devices -j failed (exit {listing.returncode}); "
+            "skipping sweep.", tee=True)
+        return
+    try:
+        devices_by_runtime = json.loads(listing.stdout).get("devices", {})
+    except (json.JSONDecodeError, AttributeError) as e:
+        log(f"WARNING: could not parse simctl device JSON for sweep: {e}",
+            tee=True)
+        return
+
+    leaked = []
+    for runtime_devices in devices_by_runtime.values():
+        for dev in runtime_devices or []:
+            name = (dev.get("name") or "").strip()
+            udid = (dev.get("udid") or "").strip()
+            if name.startswith("PerfTest-iPhone-") and udid:
+                leaked.append((name, udid, dev.get("state", "Unknown")))
+
+    if not leaked:
+        log("No leaked PerfTest-iPhone-* simulators found.", tee=True)
+        return
+
+    log(f"Found {len(leaked)} leaked PerfTest-iPhone-* simulator(s); "
+        "shutting down and deleting...", tee=True)
+    for name, udid, state in leaked:
+        log(f"  Cleaning {name} ({udid}, state={state})", tee=True)
+        # shutdown is best-effort and idempotent on already-shutdown devices
+        run_cmd(["xcrun", "simctl", "shutdown", udid], check=False)
+        run_cmd(["xcrun", "simctl", "delete", udid], check=False)
+
+
 def create_and_boot_simulator(workitem_root):
     """Create a fresh iPhone simulator under the current user's CoreSimulator
     namespace and boot it.
@@ -663,6 +720,14 @@ def create_and_boot_simulator(workitem_root):
     Exits with code 1 on any unrecoverable failure.
     """
     log_raw("=== SIMULATOR CREATE & BOOT ===", tee=True)
+
+    # Defensive cleanup: kill any leaked PerfTest-iPhone-* simulators from
+    # previous workitems before we try to boot our own. Without this, on a
+    # machine where prior post.py runs crashed or were killed by timeout,
+    # the per-user process count stays pinned just below maxUserProcs and
+    # this workitem's simctl boot fails with exit 67. Only touches devices
+    # we own (PerfTest-iPhone-* naming) so other workitems are unaffected.
+    _sweep_leaked_perftest_simulators()
 
     runtime_id, _ = _find_ios_runtime()
     if not runtime_id:
