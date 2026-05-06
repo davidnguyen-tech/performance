@@ -46,7 +46,7 @@ get_cpu_architecture() {
 # Add scripts and current directory to PYTHONPATH
 absolutePath="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 scriptPath="$absolutePath/../../scripts"
-export PYTHONPATH="${PYTHONPATH:-}:$scriptPath:$absolutePath"
+export PYTHONPATH=$PYTHONPATH:$scriptPath:$absolutePath
 echo "PYTHONPATH=$PYTHONPATH"
 
 # Parse arguments
