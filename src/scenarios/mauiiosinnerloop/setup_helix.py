@@ -1234,6 +1234,43 @@ def main():
     create_and_boot_simulator(workitem_root)
 
     if is_physical_device:
+        # Order matters: detect the physical device FIRST, signing artifacts
+        # SECOND. Both gates check independent infra (one is hardware on the
+        # USB hub, the other is files in the keychain / on disk), and either
+        # can fail by itself. Detecting the device first means the log always
+        # shows what hardware the queue exposed regardless of signing state,
+        # which is what humans actually need to debug a red work item.
+
+        # Detect and validate the connected physical device. We require one;
+        # there is NO fallback to the simulator on a device job. A green
+        # device job MUST mean device measurements ran on real hardware,
+        # never that we silently downgraded to a simulator.
+        device_udid = detect_physical_device()
+        if not device_udid:
+            reason = (
+                "No physical iOS device detected on this Helix machine. "
+                "Device job requires a connected, paired iPhone — there is "
+                "NO simulator fallback by design. This is a queue "
+                "provisioning gap (device disconnected, not paired, or "
+                "queue capacity issue), not a scenario bug. Verify the "
+                "Mac.iPhone.13.Perf machine has its iPhone connected and "
+                "paired (xcrun devicectl list devices)."
+            )
+            log_raw("=" * 70, tee=True)
+            log_raw("WORK ITEM FAILED — NO PHYSICAL DEVICE", tee=True)
+            log_raw("=" * 70, tee=True)
+            log(reason, tee=True)
+            log_raw("=" * 70, tee=True)
+            _dump_log()
+            sys.exit(1)
+
+        # Log the detected UDID for diagnostics. Note: os.environ changes
+        # in this Python process do NOT persist to subsequent Helix commands
+        # (test.py, post.py). runner.py re-detects the device independently
+        # via iOSHelper.detect_connected_device().
+        os.environ["IOS_DEVICE_UDID"] = device_udid
+        log(f"IOS_DEVICE_UDID detected: {device_udid}", tee=True)
+
         # Search for embedded.mobileprovision and 'sign' tool on the
         # Helix machine and stage them so ioshelper.py's signing flow
         # can find them.
@@ -1266,38 +1303,6 @@ def main():
             log_raw("=" * 70, tee=True)
             _dump_log()
             sys.exit(1)
-
-        # Detect and validate the connected physical device. We require one;
-        # there is NO fallback to the simulator on a device job. A green
-        # device job MUST mean device measurements ran on real hardware,
-        # never that we silently downgraded to a simulator. Fail fast and
-        # loud here so a missing/disconnected device shows up as a queue
-        # provisioning bug, not as 5 minutes of wasted dotnet build before
-        # runner.py finally raises during install.
-        device_udid = detect_physical_device()
-        if not device_udid:
-            reason = (
-                "No physical iOS device detected on this Helix machine. "
-                "Device job requires a connected, paired iPhone — there is "
-                "NO simulator fallback by design. This is a queue "
-                "provisioning gap (device disconnected, not paired, or "
-                "queue capacity issue), not a scenario bug. Verify the "
-                "Mac.iPhone.13.Perf machine has its iPhone connected and "
-                "paired (xcrun devicectl list devices)."
-            )
-            log_raw("=" * 70, tee=True)
-            log_raw("WORK ITEM FAILED — NO PHYSICAL DEVICE", tee=True)
-            log_raw("=" * 70, tee=True)
-            log(reason, tee=True)
-            log_raw("=" * 70, tee=True)
-            _dump_log()
-            sys.exit(1)
-
-        # Log the detected UDID for diagnostics. Note: os.environ changes
-        # in this Python process do NOT persist to subsequent Helix commands
-        # (test.py, post.py). runner.py re-detects the device independently
-        # via iOSHelper.detect_connected_device().
-        os.environ["IOS_DEVICE_UDID"] = device_udid
         log(f"IOS_DEVICE_UDID detected: {device_udid}", tee=True)
 
     # Step 5: Install the maui-ios workload
