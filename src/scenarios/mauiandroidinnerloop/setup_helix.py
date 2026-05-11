@@ -223,12 +223,15 @@ def install_android_dependencies(ctx):
 
     # Use dotnet msbuild (not dotnet build) to run only this target
     # without the full build pipeline.
+    # TODO: Remove -p:AndroidManifestType=GoogleV2 once
+    # https://github.com/dotnet/android/issues/11319 gets resolved.
     result = run_cmd(
         [ctx["dotnet_exe"], "msbuild", csproj,
          "-t:InstallAndroidDependencies",
          f"/p:AndroidSdkDirectory={android_home}",
          f"/p:JavaSdkDirectory={java_home}",
          "/p:AcceptAndroidSdkLicenses=True",
+         "/p:AndroidManifestType=GoogleV2",
          f"/p:TargetFramework={ctx['framework']}"],
         check=False,
     )
