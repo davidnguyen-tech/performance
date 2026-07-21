@@ -11,9 +11,9 @@ measurement on iOS. Two device kinds, two slightly different toolchains:
   │          │ codesigned first by      │  watchdog log captures the   │
   │          │ sign_app_for_device)     │  startup phases)             │
   ├──────────┼──────────────────────────┼──────────────────────────────┤
-  │ simulator│ mlaunch --installsim     │ xcrun simctl launch          │
-  │          │ (matches what the IDE    │ (NOT mlaunch --launchsim,    │
-  │          │  does during F5)         │  see Note 1 below)           │
+  │ simulator│ mlaunch --installsim     │ xcrun simctl launch +        │
+  │          │ (matches what the IDE    │ simulator SpringBoard        │
+  │          │  does during F5)         │ watchdog events              │
   └──────────┴──────────────────────────┴──────────────────────────────┘
 
 Per .NET iOS team guidance (Rolf Bjarne Kvinge), mlaunch is the canonical
@@ -26,10 +26,10 @@ Note 1 — why simctl for simulator launch instead of mlaunch --launchsim:
    simulator transitioned from Booted → Shutdown silently during the call,
    producing 180-second timeouts with no diagnostic output. simctl launch
    is what mlaunch invokes internally for the actual launch step, so the
-   wall-clock measurement is equivalent — we just skip mlaunch's stdout
-   tunnel layer (we don't need it for measurement). See
-   ``measure_cold_startup`` for the implementation and the post-launch
-   stabilization check that confirms the launched PID survives.
+   launch command is used only to obtain the process ID. Startup duration is
+   parsed from the simulator's SpringBoard watchdog events (time to main plus
+   time to first draw), not from the command's PID-return wall clock. See
+   ``measure_cold_startup`` for the implementation.
 
 Note 2 — physical-device install requires code signing:
    ``xcrun devicectl device install app`` refuses to install an unsigned
@@ -520,37 +520,124 @@ class iOSHelper:
         getLogger().info("Install completed in %.1f ms", elapsed_ms)
         return elapsed_ms
 
+    @staticmethod
+    def _watchdog_total_ms(events, bundle_id, pid=None):
+        """Return time-to-main + time-to-first-draw from watchdog events."""
+        pid_marker = f":{pid}]" if pid is not None else None
+        relevant = []
+        for event in events:
+            message = event.get('eventMessage', '')
+            if bundle_id not in message:
+                continue
+            if pid_marker and pid_marker not in message:
+                continue
+            if (
+                '[realTime] Now monitoring resource allowance' in message
+                or '[realTime] Stopped monitoring.' in message
+            ):
+                relevant.append(event)
+
+        relevant.sort(key=lambda event: event.get('timestamp', ''))
+        expected = (
+            'Now monitoring',
+            'Stopped monitoring',
+            'Now monitoring',
+            'Stopped monitoring',
+        )
+        for index in range(max(0, len(relevant) - 3)):
+            candidate = relevant[index:index + 4]
+            if not all(
+                keyword in event.get('eventMessage', '')
+                for keyword, event in zip(expected, candidate)
+            ):
+                continue
+
+            def parse_timestamp(event):
+                return datetime.strptime(
+                    event['timestamp'],
+                    '%Y-%m-%d %H:%M:%S.%f%z',
+                )
+
+            main_ms = int(
+                (
+                    parse_timestamp(candidate[1])
+                    - parse_timestamp(candidate[0])
+                ).total_seconds()
+                * 1000
+            )
+            draw_ms = int(
+                (
+                    parse_timestamp(candidate[3])
+                    - parse_timestamp(candidate[2])
+                ).total_seconds()
+                * 1000
+            )
+            total_ms = main_ms + draw_ms
+            getLogger().info(
+                "Cold startup: %d ms (Time to Main: %d ms, "
+                "Time to First Draw: %d ms)",
+                total_ms,
+                main_ms,
+                draw_ms,
+            )
+            return total_ms
+
+        return -1
+
+    @staticmethod
+    def _simulator_log_start_timestamp():
+        return datetime.now().astimezone().strftime(
+            '%Y-%m-%d %H:%M:%S%z'
+        )
+
+    def _read_simulator_watchdog_total(
+        self,
+        bundle_id,
+        pid,
+        start_timestamp,
+        command_timeout,
+    ):
+        predicate = (
+            '(process == "SpringBoard") && (category == "Watchdog") '
+            f'&& (eventMessage CONTAINS "{bundle_id}")'
+        )
+        command = [
+            'xcrun', 'simctl', 'spawn', self.device_id,
+            'log', 'show',
+            '--start', start_timestamp,
+            '--info',
+            '--style', 'ndjson',
+            '--predicate', predicate,
+        ]
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=command_timeout,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"simulator log show failed with exit {result.returncode}: "
+                f"{(result.stderr or '').strip()}"
+            )
+        events = []
+        for line in (result.stdout or '').splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get('eventType') == 'logEvent':
+                events.append(event)
+        return self._watchdog_total_ms(events, bundle_id, pid)
+
     def measure_cold_startup(self, bundle_id):
-        """Measure app cold startup time in ms (int).
-
-          - Simulator: ``xcrun simctl launch`` returns the launched PID
-            immediately. We measure wall-clock from invocation to PID
-            return (the same as what mlaunch internally reports), then
-            verify the process is still alive after a short stabilization
-            window so we don't report success for a crashed launch.
-          - Device:    mlaunch --launchdev (returns immediately with PID)
-
-        Note on the simulator path: an earlier version used
-        ``mlaunch --launchsim`` to better mirror the IDE F5 experience,
-        but on Apple Silicon Helix queues the simulator went from Booted
-        to Shutdown during/after that call (with no diagnostic output
-        from mlaunch). ``simctl launch`` is what mlaunch invokes
-        internally for the actual launch step, so the measurement is
-        equivalent for our purposes.
-        """
+        """Measure cold startup as time-to-main plus time-to-first-draw."""
 
         if self.is_physical_device:
             return self._measure_device_startup_via_watchdog(bundle_id)
 
-        # ── Simulator ────────────────────────────────────────────────
-        # Sanity-check the simulator state before we start the timer so
-        # we fail fast with a clear error if the simulator has shut down
-        # (e.g. due to a previous workitem cleanup or system pressure).
         self._assert_simulator_booted()
 
-        # Verify the app is actually installed before timing the launch
-        # — otherwise an install-registration failure would be reported
-        # as a launch failure.
         try:
             container = subprocess.run(
                 ['xcrun', 'simctl', 'get_app_container',
@@ -569,63 +656,95 @@ class iOSHelper:
                 f"simctl get_app_container timed out — simulator "
                 f"{self.device_id} not responding")
 
-        # Terminate any running instance for a true cold start
-        self._run_quiet(['xcrun', 'simctl', 'terminate', self.device_id, bundle_id])
+        self._run_quiet(
+            ['xcrun', 'simctl', 'terminate', self.device_id, bundle_id]
+        )
         time.sleep(0.5)
 
-        # `simctl launch` returns immediately with the launched PID.
-        # `--terminate-running-process` makes the launch reliably cold
-        # even if termination above didn't take effect.
-        cmd = ['xcrun', 'simctl', 'launch', '--terminate-running-process',
-               self.device_id, bundle_id]
-        getLogger().info("$ %s", ' '.join(cmd))
-        start = time.time()
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
-        elapsed_ms = int((time.time() - start) * 1000)
-
+        start_timestamp = self._simulator_log_start_timestamp()
+        command = [
+            'xcrun', 'simctl', 'launch', '--terminate-running-process',
+            self.device_id, bundle_id,
+        ]
+        getLogger().info("$ %s", ' '.join(command))
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
         if result.returncode != 0:
-            # Dump diagnostics so we can tell whether the simulator died
-            # or the app failed to launch.
             self._dump_simulator_diagnostics(bundle_id)
             raise subprocess.CalledProcessError(
-                result.returncode, cmd, result.stdout, result.stderr)
-
-        # `simctl launch` prints "<bundle_id>: <pid>" on success.
-        pid = None
-        for token in (result.stdout or '').split():
-            if token.isdigit():
-                pid = int(token)
-                break
-        if pid is None:
-            getLogger().warning(
-                "Could not parse PID from simctl launch output: %r",
-                (result.stdout or '').strip())
-        else:
-            getLogger().info("Launched %s with PID %d", bundle_id, pid)
-            # Stabilization check: the app should still be alive 2s
-            # later. If not, the launch was a crash, not a real start.
-            #
-            # iOS Simulator apps run as real macOS processes (sandboxed
-            # but in the host's process table — the PID returned by
-            # `simctl launch` IS the host PID), so we use host `ps -p`
-            # for the check. The simulator's userland does NOT include
-            # /bin/ps, so `simctl spawn <UDID> ps` would fail with
-            # ENOENT regardless of whether the app is alive.
-            time.sleep(2.0)
-            check = subprocess.run(
-                ['ps', '-p', str(pid), '-o', 'pid='],
-                capture_output=True, text=True, timeout=15,
+                result.returncode,
+                command,
+                result.stdout,
+                result.stderr,
             )
-            if check.returncode != 0 or str(pid) not in (check.stdout or ''):
-                self._dump_simulator_diagnostics(bundle_id)
-                raise RuntimeError(
-                    f"App {bundle_id} (PID {pid}) crashed within 2s of "
-                    f"launch; host ps -p exit "
-                    f"{check.returncode}, output: "
-                    f"{(check.stdout or '').strip()!r}")
 
-        getLogger().info("Cold startup: %d ms", elapsed_ms)
-        return elapsed_ms
+        match = re.search(
+            rf'{re.escape(bundle_id)}:\s*(\d+)',
+            result.stdout or '',
+        )
+        if not match:
+            self._dump_simulator_diagnostics(bundle_id)
+            raise RuntimeError(
+                "Could not parse PID from simctl launch output: "
+                f"{(result.stdout or '').strip()!r}"
+            )
+        pid = int(match.group(1))
+        getLogger().info("Launched %s with PID %d", bundle_id, pid)
+
+        timeout_seconds = float(
+            os.environ.get('IOS_SIMULATOR_WATCHDOG_TIMEOUT_SECONDS', '30')
+        )
+        poll_seconds = float(
+            os.environ.get('IOS_SIMULATOR_WATCHDOG_POLL_SECONDS', '1')
+        )
+        deadline = time.monotonic() + timeout_seconds
+        startup_ms = -1
+        while True:
+            remaining_seconds = deadline - time.monotonic()
+            if remaining_seconds <= 0:
+                break
+            startup_ms = self._read_simulator_watchdog_total(
+                bundle_id,
+                pid,
+                start_timestamp,
+                remaining_seconds,
+            )
+            if startup_ms >= 0:
+                break
+            remaining_seconds = deadline - time.monotonic()
+            if remaining_seconds <= 0:
+                break
+            time.sleep(min(poll_seconds, remaining_seconds))
+
+        if startup_ms < 0:
+            self._dump_simulator_diagnostics(bundle_id)
+            raise RuntimeError(
+                f"Expected four SpringBoard watchdog events for {bundle_id} "
+                f"(PID {pid}) within {timeout_seconds:.1f}s"
+            )
+
+        # The metric stops at first draw. Wait separately before accepting the
+        # sample so a post-first-frame crash is still rejected.
+        time.sleep(2.0)
+        check = subprocess.run(
+            ['ps', '-p', str(pid), '-o', 'pid='],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if check.returncode != 0 or str(pid) not in (check.stdout or ''):
+            self._dump_simulator_diagnostics(bundle_id)
+            raise RuntimeError(
+                f"App {bundle_id} (PID {pid}) exited after first frame; "
+                f"host ps -p exit {check.returncode}, output: "
+                f"{(check.stdout or '').strip()!r}"
+            )
+
+        return startup_ms
 
     def _assert_simulator_booted(self):
         """Raise RuntimeError if ``self.device_id`` is not in the Booted state."""
