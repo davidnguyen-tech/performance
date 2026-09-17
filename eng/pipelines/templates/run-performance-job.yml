@@ -4,6 +4,7 @@ parameters:
   jobTemplateParameters: {}         # optional -- additional parameters to pass to the job template
   dependsOn: ''                     # optional -- dependencies of the job
   steps: []                         # optional -- list of steps to run before the job
+  postHelixSteps: []                # optional -- list of steps to run after Helix completes
   pool: ''                          # required -- name of the Helix pool
   container: ''                     # optional -- id of the container
   channels: []                      # optional -- list of channels to download .NET from
@@ -248,6 +249,8 @@ jobs:
         parameters:
           osGroup: ${{ parameters.osGroup }}
           projectFile: $(_projectFile)
+      - ${{ each step in parameters.postHelixSteps }}:
+        - ${{ step }}
       - ${{ if eq(parameters.osGroup, 'windows') }}:
         - task: PowerShell@2
           displayName: Redact Logs

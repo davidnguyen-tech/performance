@@ -10,6 +10,7 @@ using BenchmarkDotNet.Running;
 using System.IO;
 using BenchmarkDotNet.Extensions;
 using BenchmarkDotNet.Configs;
+using Reporting;
 
 namespace MicroBenchmarks
 {
@@ -23,6 +24,7 @@ namespace MicroBenchmarks
             List<string> exclusionFilterValue;
             List<string> categoryExclusionFilterValue;
             bool getDiffableDisasm;
+            IConfig config;
 
             // Parse and remove any additional parameters that we need that aren't part of BDN
             try
@@ -34,6 +36,19 @@ namespace MicroBenchmarks
                 CommandLineOptions.ParseAndRemoveBooleanParameter(argsList, "--disasm-diff", out getDiffableDisasm);
 
                 CommandLineOptions.ValidatePartitionParameters(partitionCount, partitionIndex);
+
+                RuntimePackageConfig runtimePackage = RuntimePackageConfig.FromEnvironment(
+                    new EnvironmentProvider(), AppContext.TargetFrameworkName);
+                config = RecommendedConfig.Create(
+                    artifactsPath: new DirectoryInfo(Path.Combine(AppContext.BaseDirectory, "BenchmarkDotNet.Artifacts")),
+                    mandatoryCategories: ImmutableHashSet.Create([Categories.Libraries, Categories.Runtime, Categories.ThirdParty, Categories.Sve]),
+                    partitionCount: partitionCount,
+                    partitionIndex: partitionIndex,
+                    exclusionFilterValue: exclusionFilterValue,
+                    categoryExclusionFilterValue: categoryExclusionFilterValue,
+                    getDiffableDisasm: getDiffableDisasm,
+                    runtimePackage: runtimePackage)
+                    .AddValidator(new NoWasmValidator(Categories.NoWASM));
             }
             catch (ArgumentException e)
             {
@@ -48,16 +63,7 @@ namespace MicroBenchmarks
             // callbacks (e.g. SslStreamTests.GetTls13Support).
             var summaries = await BenchmarkSwitcher
                 .FromAssembly(typeof(Program).Assembly)
-                .RunAsync(argsList.ToArray(),
-                    RecommendedConfig.Create(
-                        artifactsPath: new DirectoryInfo(Path.Combine(AppContext.BaseDirectory, "BenchmarkDotNet.Artifacts")), 
-                        mandatoryCategories: ImmutableHashSet.Create([Categories.Libraries, Categories.Runtime, Categories.ThirdParty, Categories.Sve]),
-                        partitionCount: partitionCount,
-                        partitionIndex: partitionIndex,
-                        exclusionFilterValue: exclusionFilterValue,
-                        categoryExclusionFilterValue: categoryExclusionFilterValue,
-                        getDiffableDisasm: getDiffableDisasm)
-                    .AddValidator(new NoWasmValidator(Categories.NoWASM)))
+                .RunAsync(argsList.ToArray(), config)
                 .ConfigureAwait(false);
 
             return summaries.ToExitCode();

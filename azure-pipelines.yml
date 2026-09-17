@@ -11,6 +11,25 @@ parameters:
 - name: onlySanityCheck
   type: boolean
   default: false
+- name: gcRuntimePackageVersion
+  displayName: Exact approved GC runtime package version (opt-in)
+  type: string
+  default: ''
+- name: gcRuntimeCommit
+  displayName: Source commit recorded in the GC runtime package
+  type: string
+  default: ''
+- name: gcRuntimeBuildId
+  displayName: Producer Azure DevOps build ID
+  type: string
+  default: ''
+- name: gcRuntimeBranch
+  type: string
+  default: 'feature/gc/baseline'
+- name: gcPerformanceQueue
+  displayName: Owner-approved Ubuntu 22.04 x64 performance queue
+  type: string
+  default: ''
 
 resources:
   containers:
@@ -57,6 +76,12 @@ schedules:
 jobs:
   - template: /eng/pipelines/sdk-perf-jobs.yml
     parameters:
+      gcRuntimePackageVersion: ${{ parameters.gcRuntimePackageVersion }}
+      gcRuntimeCommit: ${{ parameters.gcRuntimeCommit }}
+      gcRuntimeBuildId: ${{ parameters.gcRuntimeBuildId }}
+      gcRuntimeBranch: ${{ parameters.gcRuntimeBranch }}
+      gcPerformanceQueue: ${{ parameters.gcPerformanceQueue }}
+      gcOnlySanityCheck: ${{ parameters.onlySanityCheck }}
       ${{ if or(eq(variables['System.TeamProject'], 'public'), parameters.runPublicJobs) }}:
         runPublicJobs: true
       ${{ if ne(variables['System.TeamProject'], 'public') }}:

@@ -4,6 +4,7 @@
 
 - [Benchmarking workflow for dotnet/runtime repository {#top}](#benchmarking-workflow-for-dotnetruntime-repository-top)
   - [Table of Contents](#table-of-contents)
+  - [Runtime shipping packages from runtimelab](#runtime-shipping-packages-from-runtimelab)
   - [Introduction](#introduction)
     - [Code Organization](#code-organization)
     - [dotnet runtime Prerequisites for CLR](#dotnet-runtime-prerequisites-for-clr)
@@ -35,6 +36,85 @@
   - [Benchmarking new API](#benchmarking-new-api)
     - [Reference](#reference)
     - [PR](#pr)
+
+## Runtime shipping packages from runtimelab
+
+Runtime-derived GC experiments can reuse the existing SDK/BDN pipeline with an
+exact runtime package from
+[dotnet-experimental](https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-experimental/nuget/v3/index.json).
+The package ID remains `Microsoft.NETCore.App.Runtime.<rid>`; the experiment has
+its own prerelease version label (for example, `gcbase` for `feature/gc/baseline`).
+Record the full published version and producer commit, not a floating "latest".
+
+This follows the runtime repository's
+[shipping-package workflow](https://github.com/dotnet/runtime/blob/main/docs/workflow/testing/using-dev-shipping-packages.md).
+BDN creates a second executable, so setting a `FrameworkReference` only in the
+benchmark controller is insufficient. Package mode configures BDN's existing
+`CsProjCoreToolchain` and carries `RuntimeFrameworkVersion`, `RuntimeIdentifier`,
+`SelfContained=true` and `UseAppHost=true` into its generated restore/build.
+
+On a compatible Linux x64 host, with an appropriate SDK selected, start with a
+validation-only smoke run:
+
+```bash
+export NUGET_PACKAGES="$PWD/.packages"
+export PERFLAB_RUNTIME_PACKAGE_VERSION="<exact-published-version>"
+export PERFLAB_RUNTIME_PACKAGE_RID="linux-x64"
+export PERFLAB_RUNTIME_PACKAGE_SMOKE="1"
+python3 scripts/benchmarks_ci.py -f net11.0 \
+  --filter "System.Tests.Perf_GC*NewOperator_Array*" \
+  --bdn-arguments "--gcServer false --gcConcurrent true --keepFiles"
+```
+
+The existing scripts also keep benchmark restore packages under
+`artifacts/packages`. Do not clear a machine-wide cache or overwrite an installed
+runtime. The package-version and RID variables must be set together; unset both
+to return to normal SDK-based benchmarking. `PERFLAB_RUNTIME_PACKAGE_SMOKE=1`
+selects a repository-owned one-iteration job; BDN's `--job Dry` preset does not
+replace this repository's explicit default job. Remove the smoke variable for
+measurements.
+
+Inspect the generated project, `project.assets.json`, runtime configuration,
+native/managed runtime files, and the actual child runtime/GC output. The
+controller's `dotnet --info` is not evidence of which runtime was measured.
+Package mode rejects a replaced toolchain or multiple jobs rather than silently
+running a comparison or falling back to the installed runtime. Remove the smoke
+variable only after the selected four allocation cases and runtime identity are
+correct.
+
+### Opt-in CI profile
+
+The existing `azure-pipelines.yml` entry point accepts:
+
+| Parameter | Required value |
+|---|---|
+| `gcRuntimePackageVersion` | Exact published experiment version. Empty by default, so the GC job is not enabled. |
+| `gcRuntimeCommit` | Full source SHA recorded in that package's NuGet repository metadata. |
+| `gcRuntimeBuildId` | Azure DevOps build that produced and registered the package. |
+| `gcRuntimeBranch` | Experiment branch; defaults to `feature/gc/baseline`. |
+| `gcPerformanceQueue` | Explicitly owner-approved Ubuntu 22.04 x64 performance queue. There is no default allocation. |
+
+The profile only accepts an approved manual internal run. It validates the
+package's repository/commit metadata and NuGet SHA-512 before preparation, uses the existing
+worker and Helix machinery, and selects four allocation cases with
+Workstation/background GC. It does not use the generic `onlySanityCheck` filter.
+One-work-item runs omit BDN partition arguments; an explicit BDN partition count
+of one is not valid.
+
+Results retain experiment repository/branch/commit, producer build, package
+identity and package hash. The worker verifies that `System.Private.CoreLib.dll`
+and `libcoreclr.so` in the self-contained benchmark output match the selected
+NuGet package, and the CI job fails unless all four cases return nonempty
+measurements under concurrent Workstation GC.
+Package jobs keep the existing BDN/full JSON archives and logs but do not upload
+normalized measurements to the official performance ingestion stream. The
+shared runner's `--skip-perflab-upload` switch does not change Helix access or
+the runtime selected for execution.
+
+Do not push triggering changes, queue CI, enable a schedule, or publish runtime
+packages until the user has reviewed the actual work and explicitly approved
+the corresponding action. Build-only approval is not publishing approval.
+This profile creates no schedule, feed subscription, or new pipeline definition.
 
 ## Introduction
 

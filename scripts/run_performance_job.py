@@ -111,6 +111,8 @@ class RunPerformanceJobArgs:
     build_definition_name: Optional[str] = os.environ.get("BUILD_DEFINITIONNAME")
     build_reason: Optional[str] = os.environ.get("BUILD_REASON")
     internal: bool = False
+    skip_perflab_upload: bool = False
+    runtime_package_mode: bool = False
     pgo_run_type: Optional[str] = None
     physical_promotion_run_type: Optional[str] = None
     r2r_run_type: Optional[str] = None
@@ -750,7 +752,8 @@ def get_work_item_command(
         wasm_coreclr: bool = False,
         wasm_ready_to_run: bool = False,
         only_sanity_check: bool = False,
-        wasm_workload_source: Optional[str] = None):
+        wasm_workload_source: Optional[str] = None,
+        skip_perflab_upload: bool = False):
     if os_group == "windows":
         work_item_command = [
             "python",
@@ -767,7 +770,7 @@ def get_work_item_command(
         "--architecture", architecture,
         "-f", perf_lab_framework]
     
-    if internal:
+    if internal and not skip_perflab_upload:
         work_item_command += ["--upload-to-perflab-container"]
 
     if perf_lab_framework != "net472":
@@ -803,6 +806,15 @@ def get_work_item_command(
 
 def run_performance_job(args: RunPerformanceJobArgs):
     setup_loggers(verbose=True)
+
+    if args.run_env_vars.get("PERFLAB_RUNTIME_PACKAGE_VERSION"):
+        if (not args.performance_repo_ci or args.run_kind != "micro" or
+                args.runtime_type != "coreclr" or args.is_scenario or args.compare or
+                args.core_root_dir is not None or args.baseline_core_root_dir is not None):
+            raise ValueError("Runtime package mode requires one SDK-based CoreCLR microbenchmark job, without a comparison or Core_Root override.")
+        # Experiment packages must not enter the SDK/main regression series.
+        args.skip_perflab_upload = True
+        args.runtime_package_mode = True
 
     if args.queue is None:
         if args.logical_machine is None:
@@ -887,7 +899,7 @@ def run_performance_job(args: RunPerformanceJobArgs):
 
     if args.internal:
         creator = ""
-        scenario_arguments = ["--upload-to-perflab-container"]
+        scenario_arguments = [] if args.skip_perflab_upload else ["--upload-to-perflab-container"]
         helix_source_prefix = "official"
         if args.helix_access_token is None:
             raise Exception("HelixAccessToken environment variable is not configured")
@@ -1493,7 +1505,8 @@ def run_performance_job(args: RunPerformanceJobArgs):
             wasm_coreclr,
             wasm_coreclr and args.r2r_run_type == "r2r",
             args.only_sanity_check,
-            helix_wasm_workload_source)
+            helix_wasm_workload_source,
+            skip_perflab_upload=args.skip_perflab_upload)
     
     work_item_command = get_work_item_command_for_artifact_dir(bdn_artifacts_directory)
     baseline_work_item_command = get_work_item_command_for_artifact_dir(bdn_baseline_artifacts_dir)
@@ -1557,6 +1570,7 @@ def run_performance_job(args: RunPerformanceJobArgs):
         bdn_arguments=bdn_arguments or None,
         baseline_bdn_arguments=baseline_bdn_arguments or None,
         download_files_from_helix=True,
+        runtime_package_mode=args.runtime_package_mode,
         targets_windows=args.os_group == "windows",
         helix_results_destination_dir=helix_results_destination_dir,
         python=agent_python,
@@ -1578,6 +1592,15 @@ def run_performance_job(args: RunPerformanceJobArgs):
             with open(result_file, 'r', encoding="utf8") as report_file:
                 all_results.extend(json.load(report_file))
 
+        if args.runtime_package_mode:
+            from gc_runtime_package import (
+                profile_from_perflab_environment,
+                validate_downloaded_results,
+            )
+            validate_downloaded_results(
+                helix_results_destination_dir,
+                profile_from_perflab_environment())
+
         output_counters_for_crank(all_results)
     else:
         # expose environment variables to CI for sending to helix
@@ -1596,6 +1619,7 @@ def main(argv: list[str]):
             key = argv[i]
             bool_args = {
                 "--internal": "internal",
+                "--skip-perflab-upload": "skip_perflab_upload",
                 "--physical-promotion": "physical_promotion_run_type",
                 "--is-scenario": "is_scenario",
                 "--local-build": "local_build",

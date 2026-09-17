@@ -11,8 +11,81 @@ parameters:
   - name: jobParameters
     type: object
     default: {}
+  - name: gcRuntimePackageVersion
+    type: string
+    default: ''
+  - name: gcRuntimeCommit
+    type: string
+    default: ''
+  - name: gcRuntimeBuildId
+    type: string
+    default: ''
+  - name: gcRuntimeBranch
+    type: string
+    default: 'feature/gc/baseline'
+  - name: gcPerformanceQueue
+    type: string
+    default: ''
+  - name: gcOnlySanityCheck
+    type: boolean
+    default: false
 
 jobs:
+- ${{ if or(ne(parameters.gcRuntimePackageVersion, ''), ne(parameters.gcRuntimeCommit, ''), ne(parameters.gcRuntimeBuildId, ''), ne(parameters.gcPerformanceQueue, ''), ne(parameters.gcRuntimeBranch, 'feature/gc/baseline')) }}:
+  - template: /eng/pipelines/templates/run-performance-job.yml
+    parameters:
+      additionalJobIdentifier: GcRuntimePackage
+      osGroup: linux
+      osDistro: ubuntu
+      archType: x64
+      pool:
+        vmImage: ubuntu-latest
+      container: ubuntu_x64_build_container
+      queue: ${{ parameters.gcPerformanceQueue }}
+      runKind: micro
+      runtimeType: coreclr
+      codeGenType: JIT
+      buildConfig: release
+      targetCsproj: src/benchmarks/micro/MicroBenchmarks.csproj
+      runCategories: Runtime
+      channels:
+      - main
+      onlySanityCheck: false
+      steps:
+      - script: $(Python) $(performanceRepoDir)/scripts/gc_runtime_package.py
+        displayName: Validate the approved GC package and source identity
+        env:
+          GC_RUNTIME_PACKAGE_VERSION: ${{ parameters.gcRuntimePackageVersion }}
+          GC_RUNTIME_COMMIT: ${{ parameters.gcRuntimeCommit }}
+          GC_RUNTIME_BUILD_ID: ${{ parameters.gcRuntimeBuildId }}
+          GC_RUNTIME_BRANCH: ${{ parameters.gcRuntimeBranch }}
+          GC_RUNTIME_PERFORMANCE_QUEUE: ${{ parameters.gcPerformanceQueue }}
+          GC_ONLY_SANITY_CHECK: '${{ parameters.gcOnlySanityCheck }}'
+      runEnvVars:
+      - PERFLAB_RUNTIME_PACKAGE_VERSION=$(GcRuntimePackageVersion)
+      - PERFLAB_RUNTIME_PACKAGE_RID=linux-x64
+      - PERFLAB_REPO=dotnet/runtimelab
+      - PERFLAB_BRANCH=$(GcRuntimeBranch)
+      - PERFLAB_HASH=$(GcRuntimeCommit)
+      - PERFLAB_RUNNAME=gc-runtime-package-$(Build.BuildId)-$(System.JobAttempt)
+      - RUNTIME_PACKAGE_BUILD_ID=$(GcRuntimeBuildId)
+      - RUNTIME_PACKAGE_COMMIT=$(GcRuntimeCommit)
+      - RUNTIME_PACKAGE_FEED=$(GcRuntimeFeed)
+      - RUNTIME_PACKAGE_ID=$(GcRuntimePackageId)
+      - RUNTIME_PACKAGE_RID=linux-x64
+      - RUNTIME_PACKAGE_SHA512=$(GcRuntimePackageSha512)
+      additionalSetupParameters: '--skip-perflab-upload --partition-count 1 --extra-bdn-args "--filter System.Tests.Perf_GC*NewOperator_Array* --gcServer false --gcConcurrent true --keepFiles"'
+      postHelixSteps:
+      - script: $(Python) $(performanceRepoDir)/scripts/gc_runtime_package.py --validate-results "$(performanceRepoDir)/artifacts/helix-results"
+        displayName: Verify GC runtime package results and provenance
+        env:
+          GC_RUNTIME_PACKAGE_VERSION: $(GcRuntimePackageVersion)
+          GC_RUNTIME_COMMIT: $(GcRuntimeCommit)
+          GC_RUNTIME_BUILD_ID: $(GcRuntimeBuildId)
+          GC_RUNTIME_BRANCH: $(GcRuntimeBranch)
+          GC_RUNTIME_PERFORMANCE_QUEUE: $(GcPerformanceQueue)
+          GC_RUNTIME_PACKAGE_SHA512: $(GcRuntimePackageSha512)
+
 ######################################################
 # Public correctness jobs
 ######################################################

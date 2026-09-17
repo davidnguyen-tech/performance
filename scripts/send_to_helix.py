@@ -53,6 +53,7 @@ class PerfSendToHelixArgs:
     correlation_payload_dir: str = ""
     target_csproj: str = ""
     download_files_from_helix: bool = False
+    runtime_package_mode: bool = False
     targets_windows: bool = True
 
     # Used by BDN projects
@@ -120,6 +121,7 @@ class PerfSendToHelixArgs:
         set_env_var("BenchmarkDotNetArguments", self.bdn_arguments, sep=" ")
         set_env_var("BaselineBenchmarkDotNetArguments", self.baseline_bdn_arguments, sep=" ")
         set_env_var("DownloadFilesFromHelix", self.download_files_from_helix)
+        set_env_var("RuntimePackageMode", self.runtime_package_mode)
         set_env_var("TargetsWindows", self.targets_windows)
         set_env_var("HelixResultsDestinationDir", self.helix_results_destination_dir)
         set_env_var("Python", self.python)
@@ -143,4 +145,3 @@ def perf_send_to_helix(args: PerfSendToHelixArgs):
     send_params = [args.project_file, "/restore", "/t:Test", f"/bl:{binlog_dest}"]
 
     run_msbuild_command(send_params, warn_as_error=False)
-

@@ -29,7 +29,14 @@ import shutil
 import sys
 from typing import Any, Optional
 
-from performance.common import get_repo_root_path, validate_supported_runtime, get_artifacts_directory, helixuploadroot
+from performance.common import (
+    get_artifacts_directory,
+    get_packages_directory,
+    get_repo_root_path,
+    helixuploadroot,
+    runninginlab,
+    validate_supported_runtime,
+)
 from performance.logger import setup_loggers
 from performance.tracer import setup_tracing, enable_trace_console_exporter, get_tracer
 from performance.constants import UPLOAD_CONTAINER, UPLOAD_STORAGE_URI, UPLOAD_QUEUE
@@ -309,6 +316,16 @@ def main(argv: list[str]):
                     run_contains_errors = True
 
             artifacts_dir = get_artifacts_directory() if not args.bdn_artifacts else args.bdn_artifacts
+            runtime_package_evidence = None
+            if os.environ.get("PERFLAB_RUNTIME_PACKAGE_VERSION") and runninginlab():
+                from gc_runtime_package import (
+                    profile_from_perflab_environment,
+                    validate_benchmark_artifacts,
+                )
+                runtime_package_evidence = validate_benchmark_artifacts(
+                    artifacts_dir,
+                    get_packages_directory(),
+                    profile_from_perflab_environment())
 
             reports_globpath = os.path.join(artifacts_dir, '**', '*perf-lab-report.json')
 
@@ -349,6 +366,11 @@ def main(argv: list[str]):
                 else:
                     for file in glob(binlogs_globpath, recursive=True):
                         shutil.copy(file, os.path.join(helix_upload_root, file.split(os.sep)[-1]))
+
+                if runtime_package_evidence is not None:
+                    shutil.copy(
+                        runtime_package_evidence,
+                        os.path.join(helix_upload_root, runtime_package_evidence.name))
 
                 shutil.make_archive(os.path.join(helix_upload_root, "bdn-artifacts"), 'zip', artifacts_dir)
                 getLogger().info("Created \"bdn-artifacts\".zip")

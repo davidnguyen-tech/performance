@@ -1,6 +1,6 @@
 import pytest
 
-from scripts.run_performance_job import APT_LOCK_TIMEOUT_OPTION, get_pre_commands
+from scripts.run_performance_job import APT_LOCK_TIMEOUT_OPTION, get_pre_commands, get_work_item_command
 
 
 def get_generated_apt_commands(*, internal: bool, runtime_type: str) -> list[str]:
@@ -59,3 +59,23 @@ def test_generated_prerequisites_do_not_poll_dpkg_lock():
     prerequisites = "\n".join(pre_commands)
     assert "fuser" not in prerequisites
     assert "Waiting for dpkg" not in prerequisites
+
+
+@pytest.mark.parametrize(
+    ("internal", "skip_upload", "expected_upload"),
+    [(True, False, True), (True, True, False), (False, False, False)],
+)
+def test_upload_opt_out_does_not_change_runtime_selection(internal, skip_upload, expected_upload):
+    command = get_work_item_command(
+        os_group="linux",
+        target_csproj="src/benchmarks/micro/MicroBenchmarks.csproj",
+        architecture="x64",
+        perf_lab_framework="net11.0",
+        internal=internal,
+        wasm=False,
+        bdn_artifacts_dir="$HELIX_WORKITEM_UPLOAD_ROOT/BenchmarkDotNet.Artifacts",
+        skip_perflab_upload=skip_upload,
+    )
+    assert ("--upload-to-perflab-container" in command) is expected_upload
+    assert "--dotnet-versions" in command
+    assert "net11.0" in command

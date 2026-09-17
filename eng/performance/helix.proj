@@ -9,6 +9,7 @@
 
   <PropertyGroup>
     <PartitionCount Condition="'$(PartitionCount)' == ''">15</PartitionCount>
+    <RuntimePackageDownloadFiles Condition="'$(RuntimePackageMode)' == 'true'">;gc-runtime-package-evidence.json</RuntimePackageDownloadFiles>
   </PropertyGroup>
   <ItemGroup>
     <Partition Include="$(BuildConfig).Partition0" Index="0" Condition="$(PartitionCount) &gt; 0" />
@@ -46,22 +47,28 @@
     <Partition Include="$(BuildConfig).Partition29" Index="29" Condition="$(PartitionCount) &gt; 29" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Partition Update="@(Partition)">
+      <BenchmarkDotNetPartitionArguments Condition="$(PartitionCount) &gt; 1">--partition-count $(PartitionCount) --partition-index %(Partition.Index)</BenchmarkDotNetPartitionArguments>
+    </Partition>
+  </ItemGroup>
+
   <!-- Partition the MicroBenchmarks project, but nothing else -->
   <ItemGroup Condition="$(TargetCsproj.Contains('MicroBenchmarks.csproj'))">
     <HelixWorkItem Include="@(Partition)">
       <PayloadDirectory>$(WorkItemDirectory)</PayloadDirectory>
-      <PreCommands Condition="'$(Compare)' == 'true'">$(BaselineWorkItemCommand) --partition=%(HelixWorkItem.Index) --bdn-arguments="$(BaselineBenchmarkDotNetArguments) --partition-count $(PartitionCount) --partition-index %(HelixWorkItem.Index)"</PreCommands>
-      <Command Condition="'$(TargetsWindows)' == 'true'">$(WorkItemCommand) --partition=%(HelixWorkItem.Index) --bdn-arguments="$(BenchmarkDotNetArguments) --partition-count $(PartitionCount) --partition-index %(HelixWorkItem.Index)"</Command>
+      <PreCommands Condition="'$(Compare)' == 'true'">$(BaselineWorkItemCommand) --partition=%(HelixWorkItem.Index) --bdn-arguments="$(BaselineBenchmarkDotNetArguments) %(HelixWorkItem.BenchmarkDotNetPartitionArguments)"</PreCommands>
+      <Command Condition="'$(TargetsWindows)' == 'true'">$(WorkItemCommand) --partition=%(HelixWorkItem.Index) --bdn-arguments="$(BenchmarkDotNetArguments) %(HelixWorkItem.BenchmarkDotNetPartitionArguments)"</Command>
       <Command Condition="'$(TargetsWindows)' != 'true'">
         if [ "x$PERF_PREREQS_INSTALL_FAILED" = "x1" ]; then
           echo "\n\n** Error: Failed to install prerequisites **\n\n"; (exit 1);
         else
-          $(WorkItemCommand) --partition=%(HelixWorkItem.Index) --bdn-arguments="$(BenchmarkDotNetArguments) --partition-count $(PartitionCount) --partition-index %(HelixWorkItem.Index)";
+          $(WorkItemCommand) --partition=%(HelixWorkItem.Index) --bdn-arguments="$(BenchmarkDotNetArguments) %(HelixWorkItem.BenchmarkDotNetPartitionArguments)";
         fi
       </Command>
       <PostCommands Condition="'$(Compare)' == 'true'">$(CompareCommand)</PostCommands>
       <Timeout>$(WorkItemTimeout)</Timeout>
-      <DownloadFilesFromResults Condition="'$(DownloadFilesFromHelix)' == 'true'">Partition%(HelixWorkItem.Index)-combined-perf-lab-report.json</DownloadFilesFromResults>
+      <DownloadFilesFromResults Condition="'$(DownloadFilesFromHelix)' == 'true'">Partition%(HelixWorkItem.Index)-combined-perf-lab-report.json$(RuntimePackageDownloadFiles)</DownloadFilesFromResults>
     </HelixWorkItem>
   </ItemGroup>
   <ItemGroup Condition="!$(TargetCsproj.Contains('MicroBenchmarks.csproj'))">
@@ -78,7 +85,7 @@
       </Command>
       <PostCommands Condition="'$(Compare)' == 'true'">$(CompareCommand)</PostCommands>
       <Timeout>$(WorkItemTimeout)</Timeout>
-      <DownloadFilesFromResults Condition="'$(DownloadFilesFromHelix)' == 'true'">combined-perf-lab-report.json</DownloadFilesFromResults>
+      <DownloadFilesFromResults Condition="'$(DownloadFilesFromHelix)' == 'true'">combined-perf-lab-report.json$(RuntimePackageDownloadFiles)</DownloadFilesFromResults>
     </HelixWorkItem>
   </ItemGroup>
 </Project>
