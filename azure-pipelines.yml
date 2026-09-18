@@ -37,6 +37,7 @@ resources:
       image: mcr.microsoft.com/dotnet-buildtools/prereqs:ubuntu-22.04
 
 variables:
+- template: /eng/common/templates/variables/pool-providers.yml
 - ${{ if and(ne(variables['System.TeamProject'], 'public'), or(ne(parameters.gcRuntimePackageVersion, ''), ne(parameters.gcRuntimeCommit, ''), ne(parameters.gcRuntimeBuildId, ''), ne(parameters.gcPerformanceQueue, ''), ne(parameters.gcRuntimeBranch, 'feature/gc/baseline'))) }}:
   - group: DotNet-HelixApi-Access
 
