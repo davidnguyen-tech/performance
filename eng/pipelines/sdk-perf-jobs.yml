@@ -35,6 +35,7 @@ jobs:
   - template: /eng/pipelines/templates/run-performance-job.yml
     parameters:
       additionalJobIdentifier: GcRuntimePackage
+      timeoutInMinutes: 720
       osGroup: linux
       osDistro: ubuntu
       archType: x64
