@@ -75,7 +75,7 @@ jobs:
       - RUNTIME_PACKAGE_ID=$(GcRuntimePackageId)
       - RUNTIME_PACKAGE_RID=linux-x64
       - RUNTIME_PACKAGE_SHA512=$(GcRuntimePackageSha512)
-      additionalSetupParameters: '--skip-perflab-upload --partition-count 1 --extra-bdn-args "--filter System.Tests.Perf_GC*NewOperator_Array* --gcServer false --gcConcurrent true --keepFiles"'
+      additionalSetupParameters: '--skip-perflab-upload --partition-count 1 --extra-bdn-args "--filter System.Tests.Perf_GC*NewOperator_Array* --keepFiles"'
       postHelixSteps:
       - script: $(Python) $(performanceRepoDir)/scripts/gc_runtime_package.py --validate-results "$(performanceRepoDir)/artifacts/helix-results"
         displayName: Verify GC runtime package results and provenance

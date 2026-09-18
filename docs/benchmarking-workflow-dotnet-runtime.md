@@ -63,7 +63,7 @@ export PERFLAB_RUNTIME_PACKAGE_RID="linux-x64"
 export PERFLAB_RUNTIME_PACKAGE_SMOKE="1"
 python3 scripts/benchmarks_ci.py -f net11.0 \
   --filter "System.Tests.Perf_GC*NewOperator_Array*" \
-  --bdn-arguments "--gcServer false --gcConcurrent true --keepFiles"
+  --bdn-arguments "--keepFiles"
 ```
 
 The existing scripts also keep benchmark restore packages under
@@ -73,6 +73,10 @@ to return to normal SDK-based benchmarking. `PERFLAB_RUNTIME_PACKAGE_SMOKE=1`
 selects a repository-owned one-iteration job; BDN's `--job Dry` preset does not
 replace this repository's explicit default job. Remove the smoke variable for
 measurements.
+
+Package mode fixes the pilot to concurrent Workstation GC in the configured BDN
+job. This BDN version does not expose `--gcServer` or `--gcConcurrent` command
+line options.
 
 Inspect the generated project, `project.assets.json`, runtime configuration,
 native/managed runtime files, and the actual child runtime/GC output. The

@@ -113,6 +113,8 @@ namespace BenchmarkDotNet.Extensions
             return job
                 .WithId($"RuntimePackage-{PackageVersion}")
                 .WithToolchain(CsProjCoreToolchain.From(settings))
+                .WithGcServer(false)
+                .WithGcConcurrent(true)
                 .WithArguments(_arguments);
         }
 
@@ -132,6 +134,8 @@ namespace BenchmarkDotNet.Extensions
                 if (job.Infrastructure.Toolchain is not CsProjCoreToolchain toolchain ||
                     toolchain.Generator is not CsProjGenerator generator ||
                     generator.TargetFrameworkMoniker != TargetFrameworkMoniker ||
+                    job.Environment.Gc.Server != false ||
+                    job.Environment.Gc.Concurrent != true ||
                     job.Infrastructure.Arguments is not { } arguments ||
                     !arguments.SequenceEqual(_arguments))
                 {

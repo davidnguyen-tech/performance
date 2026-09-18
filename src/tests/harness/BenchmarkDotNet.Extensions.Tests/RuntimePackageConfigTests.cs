@@ -114,7 +114,7 @@ namespace Tests
         public void ConfiguresGeneratedProjectWithoutReplacingMeasurementSettings()
         {
             var package = new RuntimePackageConfig(PackageVersion, "linux-x64", "net11.0");
-            Job job = package.ApplyTo(Job.Default.WithWarmupCount(3).WithGcServer(false));
+            Job job = package.ApplyTo(Job.Default.WithWarmupCount(3));
 
             var toolchain = Assert.IsType<CsProjCoreToolchain>(job.Infrastructure.Toolchain);
             var generator = Assert.IsType<CsProjGenerator>(toolchain.Generator);
@@ -122,6 +122,7 @@ namespace Tests
             Assert.Equal("net11.0", generator.TargetFrameworkMoniker);
             Assert.Equal(3, job.Run.WarmupCount);
             Assert.False(job.Environment.Gc.Server);
+            Assert.True(job.Environment.Gc.Concurrent);
             Assert.NotNull(job.Infrastructure.Arguments);
             Assert.Equal(new[]
             {
@@ -176,6 +177,18 @@ namespace Tests
             var package = new RuntimePackageConfig(PackageVersion, "linux-x64", "net11.0");
             Job job = package.ApplyTo(Job.Default).WithArguments(
                 new Argument[] { new MsBuildProperty("SelfContained", "false") });
+            BenchmarkRunInfo benchmarks = BenchmarkConverter.TypeToBenchmarks(
+                typeof(Probe), ManualConfig.CreateEmpty().AddJob(job));
+
+            Assert.NotEmpty(package.ValidateAsync(
+                new ValidationParameters(benchmarks.BenchmarksCases, benchmarks.Config)).ToBlockingEnumerable());
+        }
+
+        [Fact]
+        public void GcModeReplacementIsRejected()
+        {
+            var package = new RuntimePackageConfig(PackageVersion, "linux-x64", "net11.0");
+            Job job = package.ApplyTo(Job.Default).WithGcServer(true);
             BenchmarkRunInfo benchmarks = BenchmarkConverter.TypeToBenchmarks(
                 typeof(Probe), ManualConfig.CreateEmpty().AddJob(job));
 

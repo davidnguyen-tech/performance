@@ -49,7 +49,7 @@
 
   <ItemGroup>
     <Partition Update="@(Partition)">
-      <BenchmarkDotNetPartitionArguments Condition="$(PartitionCount) &gt; 1">--partition-count $(PartitionCount) --partition-index %(Partition.Index)</BenchmarkDotNetPartitionArguments>
+      <BenchmarkDotNetPartitionArguments Condition="$(PartitionCount) &gt; 1"> --partition-count $(PartitionCount) --partition-index %(Partition.Index)</BenchmarkDotNetPartitionArguments>
     </Partition>
   </ItemGroup>
 
@@ -57,13 +57,13 @@
   <ItemGroup Condition="$(TargetCsproj.Contains('MicroBenchmarks.csproj'))">
     <HelixWorkItem Include="@(Partition)">
       <PayloadDirectory>$(WorkItemDirectory)</PayloadDirectory>
-      <PreCommands Condition="'$(Compare)' == 'true'">$(BaselineWorkItemCommand) --partition=%(HelixWorkItem.Index) --bdn-arguments="$(BaselineBenchmarkDotNetArguments) %(HelixWorkItem.BenchmarkDotNetPartitionArguments)"</PreCommands>
-      <Command Condition="'$(TargetsWindows)' == 'true'">$(WorkItemCommand) --partition=%(HelixWorkItem.Index) --bdn-arguments="$(BenchmarkDotNetArguments) %(HelixWorkItem.BenchmarkDotNetPartitionArguments)"</Command>
+      <PreCommands Condition="'$(Compare)' == 'true'">$(BaselineWorkItemCommand) --partition=%(HelixWorkItem.Index) --bdn-arguments="$(BaselineBenchmarkDotNetArguments)%(HelixWorkItem.BenchmarkDotNetPartitionArguments)"</PreCommands>
+      <Command Condition="'$(TargetsWindows)' == 'true'">$(WorkItemCommand) --partition=%(HelixWorkItem.Index) --bdn-arguments="$(BenchmarkDotNetArguments)%(HelixWorkItem.BenchmarkDotNetPartitionArguments)"</Command>
       <Command Condition="'$(TargetsWindows)' != 'true'">
         if [ "x$PERF_PREREQS_INSTALL_FAILED" = "x1" ]; then
           echo "\n\n** Error: Failed to install prerequisites **\n\n"; (exit 1);
         else
-          $(WorkItemCommand) --partition=%(HelixWorkItem.Index) --bdn-arguments="$(BenchmarkDotNetArguments) %(HelixWorkItem.BenchmarkDotNetPartitionArguments)";
+          $(WorkItemCommand) --partition=%(HelixWorkItem.Index) --bdn-arguments="$(BenchmarkDotNetArguments)%(HelixWorkItem.BenchmarkDotNetPartitionArguments)";
         fi
       </Command>
       <PostCommands Condition="'$(Compare)' == 'true'">$(CompareCommand)</PostCommands>
