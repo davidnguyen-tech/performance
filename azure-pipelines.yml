@@ -80,10 +80,51 @@ schedules:
 
 jobs:
   - ${{ if and(ne(variables['System.TeamProject'], 'public'), or(ne(parameters.gcRuntimePackageVersion, ''), ne(parameters.gcRuntimeCommit, ''), ne(parameters.gcRuntimeBuildId, ''), ne(parameters.gcPerformanceQueue, ''), ne(parameters.gcRuntimeBranch, 'feature/gc/baseline'))) }}:
-    - template: /eng/common/core-templates/job/helix-job-monitor.yml
-      parameters:
-        helixAccessToken: $(HelixApiAccessToken)
-        timeoutInMinutes: 540
+    # The shared Arcade monitor template invokes eng/common/dotnet.sh directly,
+    # but this repository tracks that generated script without the executable bit.
+    - job: GcHelixJobMonitor
+      displayName: Monitor GC Helix Job
+      timeoutInMinutes: 540
+      pool:
+        name: $(DncEngInternalBuildPool)
+        os: linux
+        demands: ImageOverride -equals build.azurelinux.3.amd64
+      steps:
+      - checkout: self
+        fetchDepth: 1
+      - bash: bash ./eng/common/dotnet.sh tool restore
+        displayName: Restore Helix Job Monitor
+      - bash: |
+          set -euo pipefail
+
+          toolArgs=(
+            --helix-base-uri https://helix.dot.net/
+            --polling-interval-seconds 30
+            --fail-on-failed-tests true
+            --allow-no-helix-jobs false
+            --use-fully-qualified-test-name false
+            --max-wait-minutes 535
+            --stage-name "$(System.StageName)"
+            --stage-attempt "$(System.StageAttempt)"
+            --job-attempt "$(System.JobAttempt)"
+            --test-result-upload-parallelism 48
+            --test-result-attachment-mode Failed
+            --build-reason "$(Build.Reason)"
+            --source-branch "$(Build.SourceBranch)"
+          )
+
+          buildRepoName="${BUILD_REPOSITORY_NAME:-}"
+          if [[ "$buildRepoName" == */* ]]; then
+            toolArgs+=(--organization "${buildRepoName%%/*}" --repository "${buildRepoName#*/}")
+          elif [[ "$buildRepoName" == *-* ]]; then
+            toolArgs+=(--organization "${buildRepoName%%-*}" --repository "${buildRepoName#*-}")
+          fi
+
+          bash ./eng/common/dotnet.sh tool run dotnet-helix-job-monitor -- "${toolArgs[@]}"
+        displayName: Monitor GC Helix Job
+        env:
+          SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+          HELIX_ACCESSTOKEN: $(HelixApiAccessToken)
 
   - template: /eng/pipelines/sdk-perf-jobs.yml
     parameters:
