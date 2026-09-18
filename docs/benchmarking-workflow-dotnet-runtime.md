@@ -105,6 +105,10 @@ Workstation/background GC. It does not use the generic `onlySanityCheck` filter.
 One-work-item runs omit BDN partition arguments; an explicit BDN partition count
 of one is not valid.
 
+The submitter does not wait on its hosted build agent. A dedicated Helix monitor
+job follows the same pattern as the runtime performance pipeline, allowing up to
+nine hours for queueing and execution before reporting the work-item result.
+
 Results retain experiment repository/branch/commit, producer build, package
 identity and package hash. The worker verifies that `System.Private.CoreLib.dll`
 and `libcoreclr.so` in the self-contained benchmark output match the selected

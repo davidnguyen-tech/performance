@@ -35,7 +35,8 @@ jobs:
   - template: /eng/pipelines/templates/run-performance-job.yml
     parameters:
       additionalJobIdentifier: GcRuntimePackage
-      timeoutInMinutes: 720
+      timeoutInMinutes: 120
+      waitForWorkItemCompletion: false
       osGroup: linux
       osDistro: ubuntu
       archType: x64
@@ -76,16 +77,6 @@ jobs:
       - RUNTIME_PACKAGE_RID=linux-x64
       - RUNTIME_PACKAGE_SHA512=$(GcRuntimePackageSha512)
       additionalSetupParameters: '--skip-perflab-upload --partition-count 1 --extra-bdn-args "--filter System.Tests.Perf_GC*NewOperator_Array* --keepFiles"'
-      postHelixSteps:
-      - script: $(Python) $(performanceRepoDir)/scripts/gc_runtime_package.py --validate-results "$(performanceRepoDir)/artifacts/helix-results"
-        displayName: Verify GC runtime package results and provenance
-        env:
-          GC_RUNTIME_PACKAGE_VERSION: $(GcRuntimePackageVersion)
-          GC_RUNTIME_COMMIT: $(GcRuntimeCommit)
-          GC_RUNTIME_BUILD_ID: $(GcRuntimeBuildId)
-          GC_RUNTIME_BRANCH: $(GcRuntimeBranch)
-          GC_RUNTIME_PERFORMANCE_QUEUE: $(GcPerformanceQueue)
-          GC_RUNTIME_PACKAGE_SHA512: $(GcRuntimePackageSha512)
 
 ######################################################
 # Public correctness jobs

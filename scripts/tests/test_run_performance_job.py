@@ -1,5 +1,6 @@
 import pytest
 
+import scripts.run_performance_job as run_performance_job
 from scripts.run_performance_job import APT_LOCK_TIMEOUT_OPTION, get_pre_commands, get_work_item_command
 
 
@@ -79,3 +80,31 @@ def test_upload_opt_out_does_not_change_runtime_selection(internal, skip_upload,
     assert ("--upload-to-perflab-container" in command) is expected_upload
     assert "--dotnet-versions" in command
     assert "net11.0" in command
+
+
+@pytest.mark.parametrize(
+    ("extra_arguments", "expected_wait"),
+    [([], True), (["--no-wait-for-work-item-completion"], False)],
+)
+def test_parses_work_item_completion_mode(monkeypatch, extra_arguments, expected_wait):
+    captured = {}
+    monkeypatch.setattr(
+        run_performance_job,
+        "run_performance_job",
+        lambda args: captured.update(wait=args.wait_for_work_item_completion),
+    )
+
+    run_performance_job.main(
+        [
+            "run_performance_job.py",
+            "--run-kind",
+            "micro",
+            "--architecture",
+            "x64",
+            "--os-group",
+            "linux",
+            *extra_arguments,
+        ]
+    )
+
+    assert captured["wait"] is expected_wait

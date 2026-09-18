@@ -4,7 +4,6 @@ parameters:
   jobTemplateParameters: {}         # optional -- additional parameters to pass to the job template
   dependsOn: ''                     # optional -- dependencies of the job
   steps: []                         # optional -- list of steps to run before the job
-  postHelixSteps: []                # optional -- list of steps to run after Helix completes
   pool: ''                          # required -- name of the Helix pool
   container: ''                     # optional -- id of the container
   channels: []                      # optional -- list of channels to download .NET from
@@ -48,6 +47,7 @@ parameters:
   linkingType: ''                   # optional -- Linking type (e.g. static, dynamic)
   runtimeType: ''                   # optional -- Runtime type (e.g. mono, wasm, coreclr)
   useLocalCommitTime: false         # optional -- Whether to use the local commit time or fetch it from the remote repository
+  waitForWorkItemCompletion: true   # optional -- Whether the submitter waits for Helix or a standalone monitor does
   isCompare: false                  # optional -- If the job is comparing two configurations
   onlySanityCheck: false            # optional -- Whether to only run a sanity check for pipeline validation, not performance testing
   pgoRunType: ''                    # optional -- PGO run type (e.g. nodynamicpgo)
@@ -215,6 +215,8 @@ jobs:
               - '--runtime-type ${{ parameters.runtimeType }}'
             - ${{ if eq(parameters.useLocalCommitTime, true) }}:
               - '--use-local-commit-time'
+            - ${{ if eq(parameters.waitForWorkItemCompletion, false) }}:
+              - '--no-wait-for-work-item-completion'
             - ${{ if eq(parameters.isCompare, true) }}:
               - '--compare'
             - ${{ if eq(parameters.onlySanityCheck, true) }}:
@@ -249,8 +251,6 @@ jobs:
         parameters:
           osGroup: ${{ parameters.osGroup }}
           projectFile: $(_projectFile)
-      - ${{ each step in parameters.postHelixSteps }}:
-        - ${{ step }}
       - ${{ if eq(parameters.osGroup, 'windows') }}:
         - task: PowerShell@2
           displayName: Redact Logs

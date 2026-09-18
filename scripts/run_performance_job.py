@@ -113,6 +113,7 @@ class RunPerformanceJobArgs:
     internal: bool = False
     skip_perflab_upload: bool = False
     runtime_package_mode: bool = False
+    wait_for_work_item_completion: bool = True
     pgo_run_type: Optional[str] = None
     physical_promotion_run_type: Optional[str] = None
     r2r_run_type: Optional[str] = None
@@ -1571,6 +1572,7 @@ def run_performance_job(args: RunPerformanceJobArgs):
         baseline_bdn_arguments=baseline_bdn_arguments or None,
         download_files_from_helix=True,
         runtime_package_mode=args.runtime_package_mode,
+        wait_for_work_item_completion=args.wait_for_work_item_completion,
         targets_windows=args.os_group == "windows",
         helix_results_destination_dir=helix_results_destination_dir,
         python=agent_python,
@@ -1635,6 +1637,10 @@ def main(argv: list[str]):
 
             if key in bool_args:
                 args[bool_args[key]] = True
+                i += 1
+                continue
+            if key == "--no-wait-for-work-item-completion":
+                args["wait_for_work_item_completion"] = False
                 i += 1
                 continue
 

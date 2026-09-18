@@ -36,6 +36,10 @@ resources:
     - container: ubuntu_x64_build_container
       image: mcr.microsoft.com/dotnet-buildtools/prereqs:ubuntu-22.04
 
+variables:
+- ${{ if and(ne(variables['System.TeamProject'], 'public'), or(ne(parameters.gcRuntimePackageVersion, ''), ne(parameters.gcRuntimeCommit, ''), ne(parameters.gcRuntimeBuildId, ''), ne(parameters.gcPerformanceQueue, ''), ne(parameters.gcRuntimeBranch, 'feature/gc/baseline'))) }}:
+  - group: DotNet-HelixApi-Access
+
 trigger:
   branches:
     include:
@@ -74,6 +78,12 @@ schedules:
   always: true
 
 jobs:
+  - ${{ if and(ne(variables['System.TeamProject'], 'public'), or(ne(parameters.gcRuntimePackageVersion, ''), ne(parameters.gcRuntimeCommit, ''), ne(parameters.gcRuntimeBuildId, ''), ne(parameters.gcPerformanceQueue, ''), ne(parameters.gcRuntimeBranch, 'feature/gc/baseline'))) }}:
+    - template: /eng/common/core-templates/job/helix-job-monitor.yml
+      parameters:
+        helixAccessToken: $(HelixApiAccessToken)
+        timeoutInMinutes: 540
+
   - template: /eng/pipelines/sdk-perf-jobs.yml
     parameters:
       gcRuntimePackageVersion: ${{ parameters.gcRuntimePackageVersion }}
